@@ -3,8 +3,9 @@
 import Cocoa
 
 let px: CGFloat = 2                       // points per logical px
-let stripH = 50.0                          // logical px: y -4 ... 46
+let stripH = T.top + T.bandDepth           // room for the taller jump, including final evolutions
 let bandDepth = T.bandDepth
+let jumpHelp = "Tap Space to jump · hold for height · Esc pauses"
 
 func artDir() -> URL {
     let bundled = Bundle.main.resourceURL!.appendingPathComponent("Art")
@@ -300,6 +301,12 @@ final class Scene {
         case .ready: msg = "EMBERTRAIL"
         case .paused: msg = "PAUSED"
         case .over: msg = "GAME OVER  ·  \(g.score)"
+        case .running:
+            if let balloon = g.balloon, balloon.stage == .telegraph || balloon.stage == .drop {
+                msg = "TEAM ROCKET · ROCK INCOMING"
+            } else if !g.scheduled.isEmpty || g.things.contains(where: { $0.kind == .thrownOrb || $0.kind == .capOrb || $0.kind == .grunt }) {
+                msg = "TEAM ROCKET · JUMP THE CAPTURE ORBS"
+            }
         default: msg = ""
         }
         setText(msgL, msg, size: 11, centerX: size.width / 2, topY: size.height * 0.86, weight: .heavy)
@@ -414,7 +421,9 @@ final class StripView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func keyDown(with e: NSEvent) { app?.key(e) }
+    override func keyUp(with e: NSEvent) { app?.jumpUp(Int(e.keyCode)) }
     override func mouseDown(with e: NSEvent) { app?.click() }
+    override func mouseUp(with e: NSEvent) { app?.jumpUp(-1) }
 }
 
 // MARK: - App
@@ -429,6 +438,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var link: CADisplayLink?
     var last = 0.0, acc = 0.0
     var placementNote = ""
+    var jumpInputs: Set<Int> = []
 
     func applicationDidFinishLaunching(_ n: Notification) {
         do { art = try Art(dir: artDir()) } catch {
@@ -474,9 +484,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // Input: only while the strip has keyboard focus, which happens only after Play.
+    func jumpDown(_ source: Int) {
+        guard game.phase == .running || game.phase == .evolving else { return }
+        guard jumpInputs.insert(source).inserted else { return }
+        if jumpInputs.count == 1 { game.press() }
+    }
+    func jumpUp(_ source: Int) {
+        jumpInputs.remove(source)
+        if jumpInputs.isEmpty { game.release() }
+    }
     func key(_ e: NSEvent) {
+        guard !e.isARepeat else { return }
         switch e.keyCode {
-        case 49, 126: if game.phase == .running || game.phase == .evolving { game.press() }       // Space, Up
+        case 49, 126: jumpDown(Int(e.keyCode))                                                    // Space, Up
         case 36, 76:                                                                              // Return, Enter
             if [.ready, .over, .paused].contains(game.phase) { game.press() }
         case 35: if game.phase == .paused { game.resume() } else { game.pause() }                 // P
@@ -485,7 +505,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     func click() {
-        if game.phase == .running || game.phase == .evolving { game.press(); return }
+        if game.phase == .running || game.phase == .evolving { jumpDown(-1); return }
         let p = view.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
         guard let id = scene.buttons.first(where: { $0.value.insetBy(dx: -4, dy: -4).contains(p) })?.key else { return }
         if id == "play" { play() }
@@ -529,6 +549,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // While playing, the whole strip takes clicks (to jump). Otherwise only the Play button does; anywhere
         // else over the strip it fades and clicks go straight through to the windows behind.
         let playing = game.phase == .running || game.phase == .evolving || game.phase == .dying
+        if game.phase != .running && game.phase != .evolving { jumpInputs.removeAll(); game.release() }
         let m = NSEvent.mouseLocation, f = panel.frame
         let local = CGPoint(x: m.x - f.minX, y: m.y - f.minY)
         let hot = playing ? nil : scene.buttons.first(where: { $0.value.insetBy(dx: -4, dy: -4).contains(local) })?.key
@@ -541,7 +562,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         scene.update(game, dt: dt, help: helpText)
     }
     var helpText: String {
-        game.phase == .ready ? "Space jumps   ·   water is deadly for everyone   ·   Esc pauses" : ""
+        game.phase == .ready ? jumpHelp : ""
     }
 
     var faded = false
@@ -663,7 +684,7 @@ func renderFrame(_ scene: Scene, _ g: Game, width: CGFloat, backing b: CGFloat, 
     }
     ctx.translateBy(x: 0, y: 40)
     scene.layout(size: CGSize(width: width, height: CGFloat(stripH) * px), backing: b)
-    scene.update(g, dt: dt, help: g.phase == .ready ? "Space jumps   ·   water is deadly for everyone   ·   Esc pauses" : "")
+    scene.update(g, dt: dt, help: g.phase == .ready ? jumpHelp : "")
     ctx.interpolationQuality = .high
     scene.root.render(in: ctx)
     return ctx.makeImage()!
@@ -745,18 +766,53 @@ func selftest() -> Int32 {
     }
     check(art.orb.count == 6 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6 && art.crab.count == 6, "orb/sparkle/water/balloon/crab frames")
 
-    // Physics: apex and airtime from the brief (19.36 px, 0.44 s).
+    // Dockosaur-inspired held arc, with a forgiving minimum tap jump.
     let p = Game(seed: 1); p.start(); p.gapLeft = 1e9
     p.press(); var apex = 0.0, air = 0.0
     repeat { p.step(); apex = max(apex, p.y); air += T.step } while !p.onGround && air < 2
-    check(abs(apex - 19.36) < 0.3 && abs(air - 0.44) < 0.03, "apex \(apex), airtime \(air)")
+    check(abs(apex - 33.02) < 0.3 && abs(air - 0.614) < 0.02, "held apex \(apex), airtime \(air)")
+    let tap = Game(seed: 1); tap.start(); tap.gapLeft = 1e9
+    tap.press(); tap.release(); var tapApex = 0.0, tapAir = 0.0
+    repeat { tap.step(); tapApex = max(tapApex, tap.y); tapAir += T.step } while !tap.onGround && tapAir < 2
+    check(abs(tapApex - 27.16) < 0.3 && abs(tapAir - 0.557) < 0.02 && tapApex < apex, "quick tap retains a useful arc (\(tapApex), \(tapAir))")
+    let released = Game(seed: 1); released.start(); released.gapLeft = 1e9
+    released.press(); run(released, 0.08); released.release()
+    var releasedApex = released.y
+    while !released.onGround { released.step(); releasedApex = max(releasedApex, released.y) }
+    check(abs(releasedApex - tapApex) < 0.3, "release during ascent trims extra height smoothly")
+
+    // Holding is one jump, never an OS-repeat-driven chain of automatic jumps.
+    let held = Game(seed: 1); held.start(); held.gapLeft = 1e9; held.press(); run(held, 1.5)
+    check(held.events.filter { if case .jumped = $0 { return true }; return false }.count == 1, "holding does not auto-repeat jumps")
+
+    // A player can be 75 ms early or late on either tap or hold, against every ground obstacle.
+    var clears = 0
+    let groundTests = hazardSpecs + [HazardSpec(kind: .capOrb, w: 5, h: 5, vx: 8), HazardSpec(kind: .grunt, w: 7, h: 8, vx: 10)]
+    for speed in [T.startSpeed, 92.0, T.maxSpeed] {
+        for hazard in groundTests {
+            for hold in [false, true] {
+                for offset in [-0.075, 0.0, 0.075] {
+                    let g = Game(seed: 1); g.start(); g.gapLeft = 1e9
+                    g.active = (speed - T.startSpeed) / T.accel
+                    let flightCenter = (hold ? T.jumpV : T.tapV) / T.gravity
+                    let x = T.heroX + (speed + hazard.vx) * (flightCenter + offset) - hazard.w / 2
+                    g.things = [Thing(id: 99, kind: hazard.kind, x: x, w: hazard.w, h: hazard.h, vx: hazard.vx)]
+                    g.press(); if !hold { g.release() }; run(g, 1.1)
+                    let alive = g.phase != .dying && g.phase != .over
+                    check(alive, "\(hazard.kind) clears at speed \(speed), hold \(hold), timing offset \(offset)")
+                    if alive { clears += 1 }
+                }
+            }
+        }
+    }
+    print("forgiving jumps: \(clears)/144 early, centered, and late tap/hold clears")
 
     // Jump buffer: one press shortly before landing gives exactly one jump.
     let jb = Game(seed: 1); jb.start(); jb.gapLeft = 1e9
-    jb.press(); run(jb, 0.38); jb.events.removeAll(); jb.press(); run(jb, 1.2)
+    jb.press(); run(jb, 0.53); jb.events.removeAll(); jb.press(); jb.release(); run(jb, 1.2)
     check(jb.events.filter { if case .jumped = $0 { return true }; return false }.count == 1, "jump buffer: one jump from one press")
 
-    // Coyote: walking off a pit lip and pressing within 70 ms still jumps.
+    // Coyote: walking off a pit lip and pressing within 100 ms still jumps.
     let cy = Game(seed: 1); cy.start(); cy.gapLeft = 1e9
     cy.things = [Thing(id: 99, kind: .pit, x: T.heroX - T.bodyW / 2 - 0.2, w: 40, h: 0)]
     cy.step(); check(!cy.onGround, "pit lip: no support")
@@ -783,6 +839,7 @@ func selftest() -> Int32 {
     let ps = Game(seed: 1); ps.start(); run(ps, 1); let s0 = ps.score, d0 = ps.distance
     ps.pause(); run(ps, 5)
     check(ps.score == s0 && ps.distance == d0, "pause adds no distance or score")
+    check(!ps.holding && ps.buffer == 0, "pause clears held and buffered input")
 
     // Fair play: the bot runs 6 seeds x 5 minutes. Evolutions once each, on the ground; spawned hazards fair.
     var deaths = 0, violations = 0, evo = 0, drops = 0, cancels = 0, maxStage = 0
@@ -801,7 +858,7 @@ func selftest() -> Int32 {
         violations += g.windowViolations; evo += g.evolutions; drops += g.balloonDrops; cancels += g.balloonCancels; maxStage = max(maxStage, g.stage)
     }
     print("bot: \(deaths) deaths in 30 min, \(evo) evolutions, \(drops) balloon drops (\(cancels) cancelled as unfair), window violations \(violations)")
-    check(violations == 0, "every spawned hazard leaves a >= 120 ms input window")
+    check(violations == 0, "every spawned hazard leaves a >= 180 ms tap-jump window")
     check(maxStage == 2, "reaches the adult form")
     check(drops > 0, "balloon drops happen")
     check(deaths <= 2, "bot survives (generator is fair)")

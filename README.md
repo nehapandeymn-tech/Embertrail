@@ -6,7 +6,7 @@ A tiny endless runner that lives in a see-through strip just above your macOS Do
 
 | Meadow | Crystal cave | Volcano |
 |---|---|---|
-| ![Meadow stage with a water pit and its wave sign](docs/meadow.png) | ![Cave stage with an orb arc over a rock](docs/cave.png) | ![Volcano stage with Charizard](docs/volcano.png) |
+| ![Meadow stage with Charmander](docs/meadow.png) | ![Cave stage with Charmeleon](docs/cave.png) | ![Volcano stage with Charizard](docs/volcano.png) |
 
 ## Choose your starter
 
@@ -23,18 +23,18 @@ Pick one the first time you play. Switch anytime with **Change starter** on the 
 ## Play
 
 1. Click **▶ Play** on the strip (or the character icon in the menu bar ▸ **Play**). The strip takes keyboard focus only now, never on its own.
-2. **Space** or **↑** to jump (one fixed jump; no hold-to-fly). Clicking the strip while playing also jumps.
+2. **Space** or **↑** to jump. Tap for a comfortable hop; hold for a higher, longer arc. Clicking and holding the strip works too. One press gives one jump, without automatic repeated bouncing.
 3. **Esc** pauses and hands focus back to your other app. **P** pauses or resumes; **Enter** starts or restarts.
 
-- **Hazards:** rocks, spikes, crates, boulders, and later scuttling crabs and burrowing moles.
+- **Hazards:** rocks, spikes, crates, boulders, and later scuttling crabs and burrowing moles. Patterns are spaced 1.8–2.5 seconds apart early on, then at least 1.25 seconds apart, giving you time to land and prepare for the next jump.
 - **Water pits:** a wave sign warns you first. Water is deadly for every form.
 - **Orbs:** worth 10 points each. When they hang in an arc, the arc shows a safe jump.
 - **Score:** distance (1 point per 8 px) plus orbs. Your best score is saved.
 - **Evolution:** at 30 s of running your starter takes its second form and the world turns into a crystal cave; at 75 s it takes its final form in a volcanic field. It always waits for safe ground first.
-- **Grunt ambush:** Jessie or James throws small capture orbs. They land and roll at you, so jump them, because if one touches you, you're captured: the orb snaps shut and wobbles, and it's game over. Then jump right over the grunt to knock it out cold (swirly eyes, +25).
+- **Grunt ambush:** Jessie or James throws small capture orbs. They land and roll at you, so jump them, because if one touches you, you're captured: the orb snaps shut and wobbles, and it's game over. The two throws are spaced 1.25 seconds apart, followed by Jessie or James. Jump right over them for swirly eyes and +25. An on-screen Team Rocket warning announces the encounter.
 
   ![A grunt ambush: rolling capture orbs, then the grunt knocked out with swirly eyes](docs/ambush.gif)
-- **Balloon gang:** after 20 s Team Rocket’s Meowth balloon may drift in. It marks a spot on the ground, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
+- **Balloon gang:** after 20 s Team Rocket’s Meowth balloon may drift in. It marks a spot on the ground and shows “ROCK INCOMING”, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
 
 When you're not playing, only the Play button is clickable. Hover anywhere else on the strip and it fades away, with clicks going straight through to your windows, and the game pauses on its own when you switch apps, lock the screen or sleep.
 
@@ -61,9 +61,9 @@ build/Embertrail.app/Contents/MacOS/Embertrail --record out.gif --from 19.5 --to
 ## What's built and what isn't (yet)
 
 **Built and tested** (`--selftest`):
-- **Physics:** fixed 1/120 s steps, 19.36 px jump apex, 0.44 s airtime, a 100 ms jump buffer, 70 ms coyote time and a constant 10×14 hitbox for every form.
+- **Physics:** fixed 1/120 s steps; tap jumps reach about 27 px over 0.56 s, held jumps about 33 px over 0.61 s. A 160 ms jump buffer and 100 ms coyote time forgive slightly early or late presses. Every form retains the same 10×14 hitbox. The strip has extra headroom for fully evolved characters.
 - **Water:** real gaps in the ground, deadly by drowning.
-- **Fair hazards:** every hazard leaves at least a 120 ms jump window at the current speed (zero violations over 30 bot-minutes).
+- **Fair hazards:** every generated hazard leaves at least a 180 ms timing window even for a tap jump (zero violations over 30 bot-minutes). All 144 combinations of early/centered/late taps and holds, three speeds, and eight ground-hazard types pass. Holding a key does not auto-repeat jumps.
 - **Order of checks:** lethal collisions are resolved before orbs are collected, and orbs count once.
 - **Evolution:** exactly once per stage, in order, on the ground.
 - **Balloon drops:** at least 1.6 s of lead, one authoritative rock, and a 20 s cooldown.
@@ -76,6 +76,8 @@ build/Embertrail.app/Contents/MacOS/Embertrail --record out.gif --from 19.5 --to
 - **Sound:** the game is silent.
 - **Dock placement:** auto-hidden and side Docks use a bottom-edge fallback (labelled in the Position menu); there's no exact Dock tracking.
 - **Real-machine checks:** multiple monitors and 120 Hz displays haven't been tested on hardware.
+
+Jump feel is inspired by [Dockosaur](https://github.com/pratikaman/dockosaur): a longer arc, release-sensitive height, and buffered input. Embertrail uses its own collision and spacing rules.
 
 ## Art and licence
 

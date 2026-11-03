@@ -1,24 +1,26 @@
 // Embertrail simulation: pure game rules, no drawing or windows. Deterministic for a seed and input sequence.
 //
 // Coordinates: logical px, x to the right, y UP, ground surface at y = 0. The strip spans y = -4 (bottom of the
-// thin ground/water band) to y = 46 (top). The world scrolls left past a hero whose feet sit at x = heroX.
+// thin ground/water band) to y = 60 (top). The world scrolls left past a hero whose feet sit at x = heroX.
 import Foundation
 
 enum T {   // tunables (handoff game-config.json defaults)
     static let step = 1.0 / 120
     static let maxCatchUp = 8            // fixed steps per frame at most; longer stalls pause instead
-    static let gravity = 800.0
-    static let jumpV = 176.0
-    static let coyote = 0.07
-    static let buffer = 0.10
+    static let gravity = 700.0
+    static let jumpV = 215.0             // held jump: ~33 px apex, 0.61 s airtime
+    static let tapV = 195.0              // even a quick tap clears rocks comfortably (~27 px, 0.56 s)
+    static let coyote = 0.10
+    static let buffer = 0.16
     static let startSpeed = 72.0, maxSpeed = 112.0, accel = 0.35
     static let heroX = 84.0
     static let bodyW = 10.0, bodyH = 14.0
-    static let top = 46.0, bandDepth = 4.0
+    static let top = 60.0, bandDepth = 4.0
     static let distPerPoint = 8.0, pointsPerOrb = 10
     static let evolveAt = [30.0, 75.0]
     static let evolveFreeze = 0.65
-    static let minWindow = 0.12          // every spawned hazard must leave at least this much input timing slack
+    static let minWindow = 0.18          // minimum timing slack even for the shorter tap jump
+    static let recoveryGap = 1.25        // seconds between ordinary hazard patterns
     static let onboarding = 3.0          // safe ground at the start of a run
     static let pitsFrom = 8.0
     static let balloonFrom = 20.0, balloonCooldown = 20.0
@@ -75,8 +77,8 @@ let hazardSpecs: [HazardSpec] = [
 ]
 
 /// Seconds the hero's body spends higher than `h` during a full jump.
-func timeAbove(_ h: Double) -> (Double, Double)? {
-    let a = T.gravity / 2, b = T.jumpV
+func timeAbove(_ h: Double, launchV: Double = T.jumpV) -> (Double, Double)? {
+    let a = T.gravity / 2, b = launchV
     let d = b * b - 4 * a * h
     guard d > 0 else { return nil }
     return ((b - d.squareRoot()) / (2 * a), (b + d.squareRoot()) / (2 * a))
@@ -84,12 +86,12 @@ func timeAbove(_ h: Double) -> (Double, Double)? {
 
 /// Input timing slack for clearing a w x h obstacle approaching at `v`: how early/late the jump may be.
 func jumpWindow(w: Double, h: Double, v: Double) -> Double {
-    guard let (a, b) = timeAbove(max(h, 0.0001)) else { return -1 }
+    guard let (a, b) = timeAbove(max(h, 0.0001), launchV: T.tapV) else { return -1 }
     return (b - a) - (w + T.bodyW) / v
 }
 
 /// Pits: the hero falls only when its whole body is over water, so the dangerous span is (w - body).
-func pitWindow(w: Double, v: Double) -> Double { 2 * T.jumpV / T.gravity - max(0, w - T.bodyW) / v }
+func pitWindow(w: Double, v: Double) -> Double { 2 * T.tapV / T.gravity - max(0, w - T.bodyW) / v }
 
 enum Event { case jumped, landed, orb(Int), died(water: Bool), evolved(Int), smashLanded(Int), balloonDrop, captured, defeated(Int), orbLanded(Int) }
 
@@ -102,6 +104,7 @@ final class Game {
     var y = 0.0, vy = 0.0, onGround = true
     var coyote = 0.0, buffer = 0.0, sinceLand = 1.0, sinceJump = 1.0
     var falling = false            // dropped into a pit
+    var holding = false
     // run
     var speed = T.startSpeed, active = 0.0, distance = 0.0, orbs = 0
     var stage = 0, pendingStage: Int? = nil, evolveT = 0.0, evolutions = 0
@@ -142,16 +145,29 @@ final class Game {
         switch phase {
         case .ready, .over: start()
         case .paused: resume()
-        case .running: buffer = T.buffer
+        case .running, .evolving: holding = true; buffer = T.buffer
         default: break
         }
     }
-    func pause() { if phase == .running || phase == .evolving { pausedFrom = phase; phase = .paused } }
+    func release() {
+        holding = false
+        // Keep a forgiving minimum arc even if down/up arrive before the next physics step.
+        // Release cuts only the extra height of a held jump; it never forces a sudden fall.
+        if phase == .running && !onGround && vy > 0 && !autopilot {
+            let tapVelocity = sqrt(max(0, T.tapV * T.tapV - 2 * T.gravity * y))
+            if y < T.tapV * T.tapV / (2 * T.gravity) { vy = min(vy, tapVelocity) }
+        }
+    }
+    func pause() {
+        if phase == .running || phase == .evolving {
+            release(); buffer = 0; pausedFrom = phase; phase = .paused
+        }
+    }
     func resume() { if phase == .paused { phase = pausedFrom } }
 
     func start() {
         phase = .running
-        y = 0; vy = 0; onGround = true; coyote = 0; buffer = 0; falling = false; sinceLand = 1; sinceJump = 1
+        y = 0; vy = 0; onGround = true; coyote = 0; buffer = 0; falling = false; holding = false; sinceLand = 1; sinceJump = 1
         speed = T.startSpeed; active = 0; distance = 0; orbs = 0
         stage = 0; pendingStage = nil; evolveT = 0; evolutions = 0
         things = []; nextID = 1; events = []
@@ -185,7 +201,7 @@ final class Game {
 
         // 1. Buffered input, once, if grounded or within coyote time.
         if buffer > 0 && (onGround || coyote > 0) {
-            vy = T.jumpV; onGround = false; coyote = 0; buffer = 0; sinceJump = 0
+            vy = holding || autopilot ? T.jumpV : T.tapV; onGround = false; coyote = 0; buffer = 0; sinceJump = 0
             events.append(.jumped)
         }
         buffer = max(0, buffer - dt); coyote = max(0, coyote - dt)
@@ -232,7 +248,7 @@ final class Game {
 
         let support = !overPit()
         if !onGround {
-            y += vy * dt - T.gravity / 2 * dt * dt            // exact per step: the jump peaks at 19.36 px as designed
+            y += vy * dt - T.gravity / 2 * dt * dt            // exact integration, independent of display refresh rate
             vy -= T.gravity * dt
             if y <= 0 && vy <= 0 && support && !falling { y = 0; vy = 0; onGround = true; sinceLand = 0; events.append(.landed) }
             if y < -T.bandDepth { die(water: true); return }
@@ -296,20 +312,19 @@ final class Game {
     private func spawn() {
         let v = speed
         let x0 = worldW + 4
-        // Decision spacing: gentle early, never under ~0.9 s.
-        let gapT = active < 20 ? rng.range(1.4, 2.2) : rng.range(0.95, 1.7)
+        // Enough room to land, see the next hazard, and jump again without frantic repeated presses.
+        let gapT = active < 20 ? rng.range(1.8, 2.5) : rng.range(T.recoveryGap, 1.9)
         var right = x0
         let roll = rng.unit()
         let ambushOK = active >= 30 && active - lastAmbush >= 18 && balloon == nil && scheduled.isEmpty
-            && (worldW + 4 - lastRight) >= v * 0.95 + 70
+            && (worldW + 4 - lastRight) >= v * T.recoveryGap + 40
             && jumpWindow(w: 5, h: 5, v: v + 8) >= T.minWindow && jumpWindow(w: 7, h: 8, v: v + 10) >= T.minWindow
         if ambushOK && rng.unit() < 0.35 {
-            // Grunt ambush: two orbs thrown 0.95 s apart (they land and roll in on the same path, so they
-            // arrive 0.95 s apart), then the grunt runs in 2.0 s after the first throw.
-            scheduled = [(active, 0), (active + 0.95, 0), (active + 2.0, 1)]
+            // Separate the two rolling orbs and the character so each gets its own comfortable jump.
+            scheduled = [(active, 0), (active + 1.25, 0), (active + 2.6, 1)]
             ambushes += 1; lastAmbush = active
-            lastRight = x0 + v * 2.0 + 7
-            gapLeft = v * 2.0 + 7 + v * gapT
+            lastRight = x0 + v * 2.6 + 7
+            gapLeft = v * 2.6 + 7 + v * gapT
             return
         }
         if active >= T.pitsFrom && roll < 0.22 {
@@ -341,7 +356,7 @@ final class Game {
                 // Orb arc along an ideal jump over this hazard: it shows the safe path, never lures into danger.
                 let takeoffX = hz.x + hz.w / 2 - v * (2 * T.jumpV / T.gravity) / 2
                 for k in 1...3 {
-                    let t = Double(k) * 0.11
+                    let t = Double(k) * (2 * T.jumpV / T.gravity) / 4
                     let oy = T.jumpV * t - T.gravity / 2 * t * t + 3
                     _ = add(.orb, x: takeoffX + v * t - T.orbSize / 2, y: oy, w: T.orbSize, h: T.orbSize)
                 }
@@ -369,7 +384,7 @@ final class Game {
                 if lead >= max(1.6, 1.15 + 0.6) && clear {          // >= 1.6 s when scheduled, >= 0.6 s left after landing
                     b.stage = .telegraph; b.t = 0; b.targetX = target
                     lastRight = max(lastRight, target + 6)          // generator keeps a full gap after the rock
-                    gapLeft = max(gapLeft, (target + 6 - (worldW + 4)) + speed * 0.95)
+                    gapLeft = max(gapLeft, (target + 6 - (worldW + 4)) + speed * T.recoveryGap)
                 } else {
                     balloonCancels += 1; b.stage = .retreat; b.t = 0
                 }
