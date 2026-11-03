@@ -1,7 +1,7 @@
 // Embertrail simulation: pure game rules, no drawing or windows. Deterministic for a seed and input sequence.
 //
 // Coordinates: logical px, x to the right, y UP, ground surface at y = 0. The strip spans y = -4 (bottom of the
-// thin ground/water band) to y = 60 (top). The world scrolls left past a hero whose feet sit at x = heroX.
+// thin ground/water band) to y = 70 (top). The world scrolls left past a hero whose feet sit at x = heroX.
 import Foundation
 
 enum T {   // tunables (handoff game-config.json defaults)
@@ -15,7 +15,8 @@ enum T {   // tunables (handoff game-config.json defaults)
     static let startSpeed = 72.0, maxSpeed = 112.0, accel = 0.35
     static let heroX = 84.0
     static let bodyW = 10.0, bodyH = 14.0
-    static let top = 60.0, bandDepth = 4.0
+    static let top = 70.0, bandDepth = 4.0
+    static let crateHeight = 9.0, cratePenalty = 10
     static let distPerPoint = 8.0, pointsPerOrb = 10
     static let evolveAt = [30.0, 75.0]
     static let evolveFreeze = 0.65
@@ -44,7 +45,7 @@ struct RNG {   // SplitMix64
 enum Phase: Equatable { case ready, running, evolving, paused, dying, over }
 
 enum Kind: Equatable {
-    case rock, spike, crate, boulder, crab, mole       // ground hazards
+    case rock, spike, crate, boulder, mole       // ground hazards
     case grunt                                          // Team Rocket member: jump over them to defeat it
     case gruntDown                                      // defeated grunt (scenery, swirly eyes)
     case thrownOrb                                      // capture orb in flight; harmless until it lands
@@ -52,7 +53,8 @@ enum Kind: Equatable {
     case pit                                            // a real gap in the ground, water below
     case sign                                           // wave warning before a pit (scenery)
     case orb
-    case fallingRock                                    // dropped by the balloon; harmless until it lands
+    case fallingTrap                                    // balloon-dropped ball; harmless in flight
+    case captureTrap                                    // open ball on the ground; touching it captures the runner
 }
 
 struct Thing {
@@ -65,15 +67,16 @@ struct Thing {
     var vy = 0.0                 // falling rock
     var t = 0.0                  // age, for animation
     var gone = false
-    var isHazard: Bool { switch kind { case .rock, .spike, .crate, .boulder, .crab, .mole, .grunt, .capOrb: return true; default: return false } }
+    var bumped = false           // a crate can deduct points only once
+    var isHazard: Bool { switch kind { case .rock, .spike, .crate, .boulder, .mole, .grunt, .capOrb, .captureTrap: return true; default: return false } }
 }
 
 struct HazardSpec { let kind: Kind; let w: Double; let h: Double; let vx: Double }
 
 let hazardSpecs: [HazardSpec] = [
     .init(kind: .rock, w: 7, h: 6, vx: 0), .init(kind: .spike, w: 5, h: 7, vx: 0),
-    .init(kind: .crate, w: 8, h: 8, vx: 0), .init(kind: .boulder, w: 10, h: 8, vx: 0),
-    .init(kind: .crab, w: 8, h: 6, vx: 14), .init(kind: .mole, w: 9, h: 7, vx: 9),
+    .init(kind: .crate, w: 8, h: T.crateHeight, vx: 0), .init(kind: .boulder, w: 10, h: 8, vx: 0),
+    .init(kind: .mole, w: 9, h: 7, vx: 9),
 ]
 
 /// Seconds the hero's body spends higher than `h` during a full jump.
@@ -93,7 +96,7 @@ func jumpWindow(w: Double, h: Double, v: Double) -> Double {
 /// Pits: the hero falls only when its whole body is over water, so the dangerous span is (w - body).
 func pitWindow(w: Double, v: Double) -> Double { 2 * T.tapV / T.gravity - max(0, w - T.bodyW) / v }
 
-enum Event { case jumped, landed, orb(Int), died(water: Bool), evolved(Int), smashLanded(Int), balloonDrop, captured, defeated(Int), orbLanded(Int) }
+enum Event { case jumped, landed, orb(Int), died(water: Bool), evolved(Int), trapOpened(Int), balloonDrop, captured, defeated(Int), orbLanded(Int), crateHit(Int) }
 
 final class Game {
     var phase = Phase.ready
@@ -105,6 +108,10 @@ final class Game {
     var coyote = 0.0, buffer = 0.0, sinceLand = 1.0, sinceJump = 1.0
     var falling = false            // dropped into a pit
     var holding = false
+    var standingCrate: Int? = nil
+    var jumpOriginY = 0.0
+    var heroOffset = 0.0, knockbackV = 0.0, crateHitT = 0.0
+    var heroX: Double { T.heroX + heroOffset }
     // run
     var speed = T.startSpeed, active = 0.0, distance = 0.0, orbs = 0
     var stage = 0, pendingStage: Int? = nil, evolveT = 0.0, evolutions = 0
@@ -128,14 +135,15 @@ final class Game {
         var x: Double, y: Double
         var t = 0.0
         var targetX = 0.0           // world-anchored drop spot (screen x, scrolls)
-        var rockID: Int? = nil
+        var trapID: Int? = nil
     }
 
     var bonus = 0                  // +25 per defeated grunt
+    var penalty = 0                // crate bumps; only points already earned can be deducted
     var captured = false           // the run ended in a capture orb (for the animation)
     var ambushes = 0, defeats = 0, lastAmbush = -1e9
     var scheduled: [(at: Double, what: Int)] = []   // ambush timeline: 0 = throw an orb, 1 = grunt runs in
-    var score: Int { Int(distance / T.distPerPoint) + T.pointsPerOrb * orbs + bonus }
+    var score: Int { max(0, Int(distance / T.distPerPoint) + T.pointsPerOrb * orbs + bonus - penalty) }
 
     init(seed: UInt64 = UInt64.random(in: 1...UInt64.max)) { rng = RNG(s: seed) }
 
@@ -154,8 +162,9 @@ final class Game {
         // Keep a forgiving minimum arc even if down/up arrive before the next physics step.
         // Release cuts only the extra height of a held jump; it never forces a sudden fall.
         if phase == .running && !onGround && vy > 0 && !autopilot {
-            let tapVelocity = sqrt(max(0, T.tapV * T.tapV - 2 * T.gravity * y))
-            if y < T.tapV * T.tapV / (2 * T.gravity) { vy = min(vy, tapVelocity) }
+            let height = max(0, y - jumpOriginY)
+            let tapVelocity = sqrt(max(0, T.tapV * T.tapV - 2 * T.gravity * height))
+            if height < T.tapV * T.tapV / (2 * T.gravity) { vy = min(vy, tapVelocity) }
         }
     }
     func pause() {
@@ -168,6 +177,7 @@ final class Game {
     func start() {
         phase = .running
         y = 0; vy = 0; onGround = true; coyote = 0; buffer = 0; falling = false; holding = false; sinceLand = 1; sinceJump = 1
+        standingCrate = nil; jumpOriginY = 0; heroOffset = 0; knockbackV = 0; crateHitT = 0; penalty = 0
         speed = T.startSpeed; active = 0; distance = 0; orbs = 0
         stage = 0; pendingStage = nil; evolveT = 0; evolutions = 0
         things = []; nextID = 1; events = []
@@ -197,10 +207,16 @@ final class Game {
             return
         case .running: break
         }
+        // Actual horizontal displacement, shared by rendering, collisions, pits, and pickups.
+        crateHitT = max(0, crateHitT - dt)
+        heroOffset = max(-28, heroOffset + knockbackV * dt)
+        knockbackV *= exp(-10 * dt)
+        if crateHitT < 0.45 { heroOffset = min(0, heroOffset + 28 * dt) }
         if autopilot { think() }
 
         // 1. Buffered input, once, if grounded or within coyote time.
         if buffer > 0 && (onGround || coyote > 0) {
+            jumpOriginY = y; standingCrate = nil
             vy = holding || autopilot ? T.jumpV : T.tapV; onGround = false; coyote = 0; buffer = 0; sinceJump = 0
             events.append(.jumped)
         }
@@ -214,10 +230,10 @@ final class Game {
         active += dt
         for i in things.indices {
             things[i].x -= move + things[i].vx * dt
-            if things[i].kind == .fallingRock {
+            if things[i].kind == .fallingTrap {
                 things[i].vy -= T.gravity * 0.6 * dt
                 things[i].y = max(0, things[i].y + things[i].vy * dt)
-                if things[i].y == 0 { things[i].kind = .rock; events.append(.smashLanded(things[i].id)) }   // same entity becomes the hazard
+                if things[i].y == 0 { things[i].kind = .captureTrap; events.append(.trapOpened(things[i].id)) }   // same entity becomes the hazard
             }
             if things[i].kind == .thrownOrb {
                 things[i].y += things[i].vy * dt - 200 * dt * dt; things[i].vy -= 400 * dt
@@ -241,29 +257,60 @@ final class Game {
             }
         }
         // A grunt that went past without touching you was jumped over: it's defeated.
-        for i in things.indices where things[i].kind == .grunt && things[i].x + things[i].w < T.heroX - T.bodyW / 2 {
+        for i in things.indices where things[i].kind == .grunt && things[i].x + things[i].w < heroX - T.bodyW / 2 {
             things[i].kind = .gruntDown; things[i].vx = 0; bonus += 25; defeats += 1
             events.append(.defeated(things[i].id))
         }
 
         let support = !overPit()
-        if !onGround {
-            y += vy * dt - T.gravity / 2 * dt * dt            // exact integration, independent of display refresh rate
-            vy -= T.gravity * dt
-            if y <= 0 && vy <= 0 && support && !falling { y = 0; vy = 0; onGround = true; sinceLand = 0; events.append(.landed) }
-            if y < -T.bandDepth { die(water: true); return }
-        } else if !support {
-            onGround = false; falling = true; coyote = T.coyote; vy = 0   // walked off a pit lip
+        let left = heroX - T.bodyW / 2, right = heroX + T.bodyW / 2
+        if onGround {
+            if let id = standingCrate {
+                if let crate = things.first(where: { $0.id == id && !$0.gone && $0.x < right && $0.x + $0.w > left }) {
+                    y = crate.y + crate.h
+                } else {
+                    standingCrate = nil; onGround = false; coyote = T.coyote; vy = 0
+                }
+            } else if !support {
+                onGround = false; falling = true; coyote = T.coyote; vy = 0
+            }
         }
-        if falling && y <= 0 && support && vy <= 0 { falling = false; y = 0; vy = 0; onGround = true }   // coyote jump saved it
+        if !onGround {
+            let previousY = y
+            y += vy * dt - T.gravity / 2 * dt * dt
+            vy -= T.gravity * dt
+            // Only a downward crossing of the top is a landing. Side/underside contacts are bumps.
+            let platform = things.filter {
+                $0.kind == .crate && !$0.gone && $0.x < right && $0.x + $0.w > left
+                    && vy <= 0 && previousY >= $0.y + $0.h && y <= $0.y + $0.h
+            }.max { $0.y + $0.h < $1.y + $1.h }
+            if let crate = platform {
+                y = crate.y + crate.h; vy = 0; onGround = true; falling = false
+                standingCrate = crate.id; sinceLand = 0; events.append(.landed)
+            } else if y <= 0 && vy <= 0 && support {
+                y = 0; vy = 0; onGround = true; falling = false; standingCrate = nil
+                sinceLand = 0; events.append(.landed)
+            }
+            if y < -T.bandDepth { die(water: true); return }
+        }
         if !onGround && vy > 0 { falling = false }
 
         // 3. Lethal collisions first.
-        let bx0 = T.heroX - T.bodyW / 2, bx1 = T.heroX + T.bodyW / 2
-        for t in things where t.isHazard && !t.gone {
+        let bx0 = heroX - T.bodyW / 2, bx1 = heroX + T.bodyW / 2
+        for t in things where t.isHazard && t.kind != .crate && !t.gone {
             if t.x < bx1 && t.x + t.w > bx0 && y < t.y + t.h && y + T.bodyH > t.y {
-                if t.kind == .capOrb { captured = true; events.append(.captured) }
+                if t.kind == .capOrb || t.kind == .captureTrap { captured = true; events.append(.captured) }
                 die(water: false); return
+            }
+        }
+        // Crate sides cost points and knock the runner back, without ending the run.
+        for i in things.indices where things[i].kind == .crate && !things[i].gone && !things[i].bumped {
+            let t = things[i]
+            if t.x < bx1 && t.x + t.w > bx0 && y < t.y + t.h && y + T.bodyH > t.y {
+                things[i].bumped = true
+                let lost = min(T.cratePenalty, score); penalty += lost
+                knockbackV = -180; crateHitT = 0.8
+                events.append(.crateHit(lost))
             }
         }
         // 4. Still alive: collect orbs once.
@@ -277,8 +324,8 @@ final class Game {
         // 5. Generator and evolution.
         for (k, at) in T.evolveAt.enumerated() where active >= at && stage < k + 1 && pendingStage == nil { pendingStage = k + 1 }
         if let p = pendingStage {
-            let clear = !things.contains { ($0.isHazard || $0.kind == .pit || $0.kind == .fallingRock) && $0.x + $0.w > T.heroX - 8 }
-            if clear && onGround && balloon == nil { phase = .evolving; evolveT = 0; _ = p }
+            let clear = !things.contains { ($0.isHazard || $0.kind == .pit || $0.kind == .fallingTrap) && $0.x + $0.w > heroX - 8 }
+            if clear && onGround && standingCrate == nil && balloon == nil { phase = .evolving; evolveT = 0; _ = p }
         } else {
             gapLeft -= move
             let balloonArriving = balloon.map { $0.stage == .enter || $0.stage == .hover } ?? false
@@ -291,7 +338,7 @@ final class Game {
     }
 
     func overPit() -> Bool {
-        things.contains { $0.kind == .pit && $0.x <= T.heroX - T.bodyW / 2 && $0.x + $0.w >= T.heroX + T.bodyW / 2 }
+        things.contains { $0.kind == .pit && $0.x <= heroX - T.bodyW / 2 && $0.x + $0.w >= heroX + T.bodyW / 2 }
     }
 
     private func die(water: Bool) {
@@ -345,7 +392,7 @@ final class Game {
         } else {
             let fair = hazardSpecs.filter { s in
                 let rel = v + s.vx
-                if s.kind == .crab || s.kind == .mole { if active < 12 { return false } }
+                if s.kind == .mole { if active < 12 { return false } }
                 return jumpWindow(w: s.w, h: s.h, v: rel) >= T.minWindow
             }
             let s = fair[rng.int(fair.count)]
@@ -379,12 +426,12 @@ final class Game {
             if b.t > 1.0 {
                 // Schedule a drop only if the spot is far enough ahead and clear of every other obstacle.
                 let target = b.x
-                let lead = (target - (T.heroX + T.bodyW / 2)) / speed
+                let lead = (target - (heroX + T.bodyW / 2)) / speed
                 let clear = !things.contains { ($0.isHazard || $0.kind == .pit || $0.kind == .sign) && abs(($0.x + $0.w / 2) - target) < speed * 0.9 }
-                if lead >= max(1.6, 1.15 + 0.6) && clear {          // >= 1.6 s when scheduled, >= 0.6 s left after landing
+                if lead >= max(1.6, 1.15 + 0.6) && clear && jumpWindow(w: 9, h: 8, v: speed) >= T.minWindow {          // >= 1.6 s when scheduled, >= 0.6 s left after landing
                     b.stage = .telegraph; b.t = 0; b.targetX = target
-                    lastRight = max(lastRight, target + 6)          // generator keeps a full gap after the rock
-                    gapLeft = max(gapLeft, (target + 6 - (worldW + 4)) + speed * T.recoveryGap)
+                    lastRight = max(lastRight, target + 9)          // generator keeps a full gap after the trap
+                    gapLeft = max(gapLeft, (target + 9 - (worldW + 4)) + speed * T.recoveryGap)
                 } else {
                     balloonCancels += 1; b.stage = .retreat; b.t = 0
                 }
@@ -392,8 +439,8 @@ final class Game {
         case .telegraph:
             b.x -= move; b.targetX -= move                           // drifts with the ground it marks
             if b.t >= 0.8 {
-                let r = add(.fallingRock, x: b.targetX - 3, y: b.y + 2, w: 6, h: 6)
-                b.rockID = r.id; b.stage = .drop; b.t = 0; balloonDrops += 1
+                let r = add(.fallingTrap, x: b.targetX - 4.5, y: b.y + 2, w: 9, h: 8)
+                b.trapID = r.id; b.stage = .drop; b.t = 0; balloonDrops += 1
                 events.append(.balloonDrop)
             }
         case .drop:
@@ -408,14 +455,14 @@ final class Game {
 
     private func think() {
         guard onGround || coyote > 0 else { return }
-        let front = T.heroX + T.bodyW / 2
-        let ahead = things.filter { ($0.isHazard || $0.kind == .pit) && $0.x + $0.w > T.heroX - T.bodyW / 2 }
+        let front = heroX + T.bodyW / 2
+        let ahead = things.filter { ($0.isHazard || $0.kind == .pit) && $0.x + $0.w > heroX - T.bodyW / 2 }
         guard let n = ahead.min(by: { $0.x < $1.x }) else { return }
         let v = speed + n.vx
         if n.kind == .pit {
             // Dangerous while the whole body is over water: take off mid-way through the safe window.
             let span = max(0, n.w - T.bodyW), air = v * 2 * T.jumpV / T.gravity
-            if (n.x - (T.heroX - T.bodyW / 2)) <= (air - span) / 2 { buffer = T.buffer }
+            if (n.x - (heroX - T.bodyW / 2)) <= (air - span) / 2 { buffer = T.buffer }
             return
         }
         guard let (a, b) = timeAbove(n.h + 0.5) else { return }

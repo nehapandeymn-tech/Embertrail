@@ -110,15 +110,17 @@ final class Scene {
             case .orb(let id):
                 if let t = g.things.first(where: { $0.id == id }) { effects.append(Effect(kind: .sparkle, x: t.x + t.w / 2, y: t.y, life: 0.45)) }
             case .died(let water):
-                if water { effects.append(Effect(kind: .splash, x: T.heroX, y: -1, life: 0.6)) }
+                if water { effects.append(Effect(kind: .splash, x: g.heroX, y: -1, life: 0.6)) }
             case .evolved:
-                effects.append(Effect(kind: .burst, x: T.heroX, y: 4, life: 0.5)); cheerUntil = g.clock + 1.6
+                effects.append(Effect(kind: .burst, x: g.heroX, y: 4, life: 0.5)); cheerUntil = g.clock + 1.6
             case .defeated(let id):
                 if let t = g.things.first(where: { $0.id == id }) {
                     effects.append(Effect(kind: .sparkle, x: t.x + t.w / 2, y: 6, life: 0.4))
                     effects.append(Effect(kind: .text("+25"), x: t.x + t.w / 2, y: 14, life: 0.9))
                 }
-            case .smashLanded(let id):
+            case .crateHit(let lost):
+                effects.append(Effect(kind: .text(lost > 0 ? "−\(lost)" : "BUMP"), x: g.heroX, y: g.y + 18, life: 0.9))
+            case .trapOpened(let id):
                 if let t = g.things.first(where: { $0.id == id }) { effects.append(Effect(kind: .sparkle, x: t.x + 3, y: 0, life: 0.3)) }
             default: break
             }
@@ -190,17 +192,20 @@ final class Scene {
         for t in g.things where !t.gone {
             let cx = t.x + t.w / 2
             switch t.kind {
-            case .rock, .fallingRock: sprite("thing", art.rockSmall, feetX: cx, y: t.y)
+            case .rock: sprite("thing", art.rockSmall, feetX: cx, y: t.y)
             case .spike: sprite("thing", art.spike, feetX: cx, y: 0)
             case .crate: sprite("thing", art.crate, feetX: cx, y: 0)
             case .boulder: sprite("thing", art.boulder, feetX: cx, y: 0)
-            case .crab: sprite("thing", art.crab[moving ? Int(t.t * 10) % art.crab.count : 0], feetX: cx, y: 0)
             case .mole: sprite("thing", art.mole[moving ? Int(t.t * 9) % art.mole.count : 0], feetX: cx, y: 0)
             case .sign: sprite("thing", art.signWater, feetX: cx, y: 0)
             case .orb:
                 let bob = moving ? (sin(t.t * 5) * 0.8).rounded() : 0
                 sprite("thing", art.orb[moving ? Int(t.t * 8) % art.orb.count : 0], feetX: cx, y: t.y + bob)
             case .pit: break
+            case .fallingTrap:
+                sprite("thing", art.captureClosed[0], feetX: cx, y: t.y)
+            case .captureTrap:
+                sprite("thing", art.captureOpen[5], feetX: cx, y: 0)
             case .grunt:
                 let member = art.gangMembers[t.id % art.gangMembers.count]
                 sprite("thing", member.run[moving ? Int(t.t * 10) % member.run.count : 0], feetX: cx, y: 0)
@@ -252,18 +257,19 @@ final class Scene {
         }
         if heroL.superlayer == nil { world.addSublayer(heroL) }
         heroL.zPosition = 5
-        put(heroL, hs.image, frame(T.heroX - hs.anchorX, g.y, hs.w, hs.h))
-        heroL.opacity = g.phase == .dying && moving && Int(g.dyingT * 12) % 2 == 1 ? 0.25 : 1
+        put(heroL, hs.image, frame(g.heroX - hs.anchorX, g.y, hs.w, hs.h))
+        let hitFlash = g.crateHitT > 0 && moving && Int(g.crateHitT * 16) % 2 == 1
+        heroL.opacity = g.phase == .dying && moving && Int(g.dyingT * 12) % 2 == 1 ? 0.25 : (hitFlash ? 0.55 : 1)
         heroL.isHidden = (picking && g.phase == .ready) || (g.phase == .dying && g.y < -6) || ((g.phase == .dying || g.phase == .over) && g.captured && g.dyingT > 0.2)
         if g.captured && (g.phase == .dying || g.phase == .over) {
             // The capture orb pops open, snaps shut around the starter, then wobbles three times.
             let k = g.dyingT
             let f: Sprite
-            if k < 0.45 { f = art.orbOpen[max(0, min(art.orbOpen.count - 1, art.orbOpen.count - 1 - Int(k / 0.45 * Double(art.orbOpen.count))))] }
-            else if k < 1.45 && moving { f = art.orbBounce[Int((k - 0.45) * 9) % art.orbBounce.count] }
-            else { f = art.orb[0] }
+            if k < 0.45 { f = art.captureOpen[max(0, min(art.captureOpen.count - 1, art.captureOpen.count - 1 - Int(k / 0.45 * Double(art.captureOpen.count))))] }
+            else if k < 1.45 && moving { f = art.captureClosed[Int((k - 0.45) * 9) % art.captureClosed.count] }
+            else { f = art.captureClosed[0] }
             let wob = k >= 0.45 && k < 1.45 && moving ? sin((k - 0.45) * 3 * 2 * .pi) * 1.5 : 0
-            sprite("fx", f, feetX: T.heroX + wob, y: 0)
+            sprite("fx", f, feetX: g.heroX + wob, y: 0)
         }
 
         // Effects.
@@ -303,8 +309,8 @@ final class Scene {
         case .over: msg = "GAME OVER  ·  \(g.score)"
         case .running:
             if let balloon = g.balloon, balloon.stage == .telegraph || balloon.stage == .drop {
-                msg = "TEAM ROCKET · ROCK INCOMING"
-            } else if !g.scheduled.isEmpty || g.things.contains(where: { $0.kind == .thrownOrb || $0.kind == .capOrb || $0.kind == .grunt }) {
+                msg = "TEAM ROCKET · CAPTURE BALL INCOMING"
+            } else if !g.scheduled.isEmpty || g.things.contains(where: { $0.kind == .thrownOrb || $0.kind == .capOrb || $0.kind == .grunt || $0.kind == .captureTrap }) {
                 msg = "TEAM ROCKET · JUMP THE CAPTURE ORBS"
             }
         default: msg = ""
@@ -760,11 +766,11 @@ func selftest() -> Int32 {
         for (i, st) in f.stages.enumerated() {
             let tallest = (st.idle + st.run + st.jump).map(\.h).max()!
             check(abs(st.idle.map(\.h).max()! - Art.heroHeights[i]) < 0.6, "\(f.name) stage \(i) idle height")
-            let apexTop = T.jumpV * T.jumpV / (2 * T.gravity) + tallest
+            let apexTop = T.crateHeight + T.jumpV * T.jumpV / (2 * T.gravity) + tallest
             check(apexTop <= T.top, "\(f.name) stage \(i) apex top \(apexTop) within \(T.top)")
         }
     }
-    check(art.orb.count == 6 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6 && art.crab.count == 6, "orb/sparkle/water/balloon/crab frames")
+    check(art.orb.count == 6 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6, "orb/sparkle/water/balloon frames")
 
     // Dockosaur-inspired held arc, with a forgiving minimum tap jump.
     let p = Game(seed: 1); p.start(); p.gapLeft = 1e9
@@ -787,7 +793,7 @@ func selftest() -> Int32 {
 
     // A player can be 75 ms early or late on either tap or hold, against every ground obstacle.
     var clears = 0
-    let groundTests = hazardSpecs + [HazardSpec(kind: .capOrb, w: 5, h: 5, vx: 8), HazardSpec(kind: .grunt, w: 7, h: 8, vx: 10)]
+    let groundTests = hazardSpecs + [HazardSpec(kind: .capOrb, w: 5, h: 5, vx: 8), HazardSpec(kind: .grunt, w: 7, h: 8, vx: 10), HazardSpec(kind: .captureTrap, w: 9, h: 8, vx: 0)]
     for speed in [T.startSpeed, 92.0, T.maxSpeed] {
         for hazard in groundTests {
             for hold in [false, true] {
@@ -798,7 +804,7 @@ func selftest() -> Int32 {
                     let x = T.heroX + (speed + hazard.vx) * (flightCenter + offset) - hazard.w / 2
                     g.things = [Thing(id: 99, kind: hazard.kind, x: x, w: hazard.w, h: hazard.h, vx: hazard.vx)]
                     g.press(); if !hold { g.release() }; run(g, 1.1)
-                    let alive = g.phase != .dying && g.phase != .over
+                    let alive = g.phase != .dying && g.phase != .over && g.penalty == 0
                     check(alive, "\(hazard.kind) clears at speed \(speed), hold \(hold), timing offset \(offset)")
                     if alive { clears += 1 }
                 }
@@ -840,6 +846,72 @@ func selftest() -> Int32 {
     ps.pause(); run(ps, 5)
     check(ps.score == s0 && ps.distance == d0, "pause adds no distance or score")
     check(!ps.holding && ps.buffer == 0, "pause clears held and buffered input")
+
+    // Crates are platforms on top and non-lethal, once-only penalties on the sides.
+    let platform = Game(seed: 1); platform.start(); platform.gapLeft = 1e9
+    platform.y = 10; platform.vy = -80; platform.onGround = false
+    platform.things = [Thing(id: 90, kind: .crate, x: T.heroX - 4, w: 8, h: T.crateHeight)]
+    run(platform, 0.025)
+    check(platform.phase == .running && platform.onGround && platform.standingCrate == 90 && platform.y == T.crateHeight && platform.penalty == 0, "landing on a crate is safe")
+    platform.press(); platform.release(); platform.step()
+    check(!platform.onGround && platform.standingCrate == nil && platform.vy > 0 && platform.y > T.crateHeight, "jump again from the crate top")
+    var crateApex = platform.y
+    while !platform.onGround && platform.phase == .running {
+        platform.step(); crateApex = max(crateApex, platform.y)
+    }
+    check(abs(crateApex - (T.crateHeight + 27.16)) < 0.3, "tap jump height is relative to the crate surface")
+
+    let bufferedCrate = Game(seed: 1); bufferedCrate.start(); bufferedCrate.gapLeft = 1e9
+    bufferedCrate.y = 10; bufferedCrate.vy = -80; bufferedCrate.onGround = false
+    bufferedCrate.things = [Thing(id: 91, kind: .crate, x: T.heroX - 4, w: 8, h: T.crateHeight)]
+    bufferedCrate.press(); bufferedCrate.release(); run(bufferedCrate, 0.05)
+    check(bufferedCrate.y > T.crateHeight && bufferedCrate.vy > 0 && bufferedCrate.penalty == 0, "a buffered press chains a jump off the crate")
+
+    let walkOff = Game(seed: 1); walkOff.start(); walkOff.gapLeft = 1e9
+    walkOff.y = T.crateHeight; walkOff.standingCrate = 92
+    walkOff.things = [Thing(id: 92, kind: .crate, x: T.heroX - 4, w: 8, h: T.crateHeight)]
+    run(walkOff, 0.5)
+    check(walkOff.onGround && walkOff.y == 0 && walkOff.standingCrate == nil && walkOff.phase == .running, "leaving a moving crate drops onto safe ground")
+
+    let bump = Game(seed: 1); bump.start(); bump.gapLeft = 1e9; bump.distance = 800
+    bump.things = [Thing(id: 93, kind: .crate, x: T.heroX + 4, w: 8, h: T.crateHeight)]
+    bump.step()
+    check(bump.phase == .running && bump.score == 90 && bump.penalty == 10, "crate side hit loses ten points instead of killing")
+    run(bump, 0.1)
+    check(bump.heroX < T.heroX - 5 && bump.penalty == 10, "crate hit moves the actual collision body backward and charges once")
+    let offsetAtPause = bump.heroOffset; bump.pause(); run(bump, 1)
+    check(bump.heroOffset == offsetAtPause, "pause freezes knockback")
+    bump.resume(); run(bump, 2)
+    check(bump.phase == .running && abs(bump.heroOffset) < 0.01 && bump.penalty == 10, "recover naturally without repeated charges from the same crate")
+    bump.start()
+    check(bump.penalty == 0 && bump.heroOffset == 0 && bump.standingCrate == nil, "restart clears crate damage and displacement")
+    let emptyScore = Game(seed: 1); emptyScore.start(); emptyScore.gapLeft = 1e9
+    emptyScore.things = [Thing(id: 94, kind: .crate, x: T.heroX + 4, w: 8, h: T.crateHeight)]
+    emptyScore.step()
+    check(emptyScore.score == 0 && emptyScore.penalty == 0 && emptyScore.phase == .running, "a crate bump cannot create negative points or future score debt")
+
+    let underneath = Game(seed: 1); underneath.start(); underneath.gapLeft = 1e9
+    underneath.y = 7; underneath.vy = 60; underneath.onGround = false; underneath.distance = 800
+    underneath.things = [Thing(id: 95, kind: .crate, x: T.heroX - 4, y: 20, w: 8, h: T.crateHeight)]
+    underneath.step()
+    check(underneath.standingCrate == nil && underneath.penalty == 10 && underneath.phase == .running, "hitting a crate from below is not a top landing")
+
+    // The balloon drops one harmless closed ball, which opens into a stationary capture trap.
+    let trapDrop = Game(seed: 1); trapDrop.start(); trapDrop.gapLeft = 1e9
+    var dropping = Game.Balloon(x: 230, y: 10)
+    dropping.stage = .telegraph; dropping.t = 0.79; dropping.targetX = 230
+    trapDrop.balloon = dropping; run(trapDrop, 0.05)
+    let droppedID = trapDrop.things.first(where: { $0.kind == .fallingTrap })?.id
+    check(droppedID != nil && trapDrop.balloonDrops == 1, "balloon creates exactly one falling ball")
+    run(trapDrop, 0.4)
+    check(trapDrop.things.contains { $0.id == droppedID && $0.kind == .captureTrap && $0.y == 0 && $0.vx == 0 }, "the same dropped ball opens on the ground without rolling")
+    check(trapDrop.balloonDrops == 1 && !trapDrop.things.contains { $0.kind == .rock }, "balloon leaves a trap, not a rock")
+    let trapped = Game(seed: 1); trapped.start(); trapped.gapLeft = 1e9
+    trapped.things = [Thing(id: 96, kind: .captureTrap, x: T.heroX + 4, w: 9, h: 8)]
+    trapped.step()
+    check(trapped.captured && trapped.phase == .dying && trapped.events.contains { if case .captured = $0 { return true }; return false }, "touching an open ball starts the capture sequence")
+    run(trapped, 1.7)
+    check(trapped.phase == .over, "capture ends the run after the closing and wobble animation")
 
     // Fair play: the bot runs 6 seeds x 5 minutes. Evolutions once each, on the ground; spawned hazards fair.
     var deaths = 0, violations = 0, evo = 0, drops = 0, cancels = 0, maxStage = 0

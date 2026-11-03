@@ -137,10 +137,11 @@ final class Art {
     /// All three starter families, each with three evolution stages.
     let families: [Family]
     var hero: [Stage] { families[0].stages }
-    let orb: [Sprite], orbBounce: [Sprite], orbOpen: [Sprite], sparkle: [Sprite]
+    let orb: [Sprite], sparkle: [Sprite]
+    let captureClosed: [Sprite], captureOpen: [Sprite]
     let rockSmall: Sprite, boulder: Sprite, spike: Sprite, spikes3: Sprite, crate: Sprite
     let signWater: Sprite, signWarn: Sprite
-    let crab: [Sprite], mole: [Sprite]
+    let mole: [Sprite]
     let explorerCheer: [Sprite]
     let balloon: [Sprite]
     struct GangMember { let idle: [Sprite]; let run: [Sprite]; let down: Sprite }
@@ -174,10 +175,10 @@ final class Art {
         let objs = cutSheet(try loadSheet(dir, "orbs-obstacles-signs"), cols: 6, rows: 6, minBlob: 6)
         let orbK = 9 / Double(row(0, in: objs).map(\.h).max()!)
         orb = row(0, in: objs).map { makeSprite($0, k: orbK) }
-        orbBounce = row(1, in: objs).map { makeSprite($0, k: orbK) }
-        orbOpen = row(2, in: objs).map { makeSprite($0, k: orbK) }
         sparkle = row(3, in: objs).map { makeSprite($0, k: orbK) }
-        smallOrb = row(0, in: objs).map { makeSprite($0, k: orbK * 6 / 9) }
+        captureClosed = (0..<6).map { _ in captureBallSprite(open: 0) }
+        captureOpen = (0..<6).map { captureBallSprite(open: Double($0) / 5) }
+        smallOrb = (0..<6).map { _ in captureBallSprite(open: 0, size: 6) }
         let props = objs[4]
         func sized(_ c: Cut?, h: Double) -> Sprite { let c = c!; return makeSprite(c, k: h / Double(c.h)) }
         rockSmall = sized(props[0], h: 6); boulder = sized(props[1], h: 8)
@@ -185,8 +186,6 @@ final class Art {
         signWater = sized(objs[5][1], h: 13); signWarn = sized(objs[5][2], h: 13)
 
         let critters = cutSheet(try loadSheet(dir, "creatures-and-explorer"), cols: 6, rows: 6)
-        let crabK = 7 / Double(row(3, in: critters).map(\.h).max()!)
-        crab = row(3, in: critters).map { makeSprite($0, k: crabK) }
         let moleK = 8 / Double(row(1, in: critters).map(\.h).max()!)
         mole = row(1, in: critters).map { makeSprite($0, k: moleK) }
         let expK = 18 / Double(row(5, in: critters).map(\.h).max()!)
@@ -237,6 +236,35 @@ final class Art {
             [sized(para[b][0], h: 14), sized(para[b][1], h: 12), sized(para[b][2], h: 6)]
         }
     }
+}
+
+/// A geometric red-and-white capture ball. The lid lifts to show an unmistakably open ground trap.
+/// Drawn with the game's graphics API so the opening animation has consistent dimensions and anchors.
+func captureBallSprite(open: Double, size: Double = 9) -> Sprite {
+    let scale = size / 9
+    let w = Int(ceil(size * Double(artRes))), h = Int(ceil((9 + open * 4) * scale * Double(artRes)))
+    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.scaleBy(x: artRes * scale, y: artRes * scale)
+    ctx.setStrokeColor(CGColor(red: 0.06, green: 0.07, blue: 0.12, alpha: 1)); ctx.setLineWidth(0.8)
+    // Lower shell: flat rim and rounded white bowl.
+    ctx.beginPath(); ctx.move(to: CGPoint(x: 0.5, y: 4.5))
+    ctx.addArc(center: CGPoint(x: 4.5, y: 4.5), radius: 4, startAngle: .pi, endAngle: 2 * .pi, clockwise: false)
+    ctx.closePath(); ctx.setFillColor(CGColor(gray: 0.98, alpha: 1)); ctx.drawPath(using: .fillStroke)
+    if open > 0 {
+        ctx.setFillColor(CGColor(red: 0.12, green: 0.15, blue: 0.23, alpha: 1))
+        ctx.fillEllipse(in: CGRect(x: 0.7, y: 3.4, width: 7.6, height: 2))
+    }
+    // Upper red shell separates from the bowl as the trap opens.
+    let lidY = 4.5 + open * 4
+    ctx.beginPath(); ctx.move(to: CGPoint(x: 8.5, y: lidY))
+    ctx.addArc(center: CGPoint(x: 4.5, y: lidY), radius: 4, startAngle: 0, endAngle: .pi, clockwise: false)
+    ctx.closePath(); ctx.setFillColor(CGColor(red: 0.95, green: 0.16, blue: 0.22, alpha: 1)); ctx.drawPath(using: .fillStroke)
+    ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+    ctx.fillEllipse(in: CGRect(x: 2, y: lidY + 1.5, width: 1.7, height: 1))
+    ctx.addEllipse(in: CGRect(x: 3.2, y: 3.2, width: 2.6, height: 2.6)); ctx.drawPath(using: .fillStroke)
+    let img = ctx.makeImage()!
+    return makeSprite(Cut(image: img, w: w, h: h), k: 1 / Double(artRes))
 }
 
 /// Turns a standing sprite onto its back (90 degrees), for the knocked-over grunt.
