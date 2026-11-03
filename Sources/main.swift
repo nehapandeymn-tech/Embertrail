@@ -23,11 +23,12 @@ enum Prefs {
     static var reduceMotion: Bool { get { d.bool(forKey: "reduceMotion") } set { d.set(newValue, forKey: "reduceMotion") } }
     static var display: Int { get { d.integer(forKey: "display") } set { d.set(newValue, forKey: "display") } }
     static var hidden: Bool { get { d.bool(forKey: "hidden") } set { d.set(newValue, forKey: "hidden") } }
+    static var starter: String? { get { d.string(forKey: "starter") } set { d.set(newValue, forKey: "starter") } }
 }
 
 // MARK: - Visual effects (decorative; never touch game truth)
 
-struct Effect { enum Kind { case sparkle, splash, burst }; let kind: Kind; let x: Double; let y: Double; var t = 0.0; let life: Double }
+struct Effect { enum Kind { case sparkle, splash, burst, text(String) }; let kind: Kind; let x: Double; let y: Double; var t = 0.0; let life: Double }
 
 // MARK: - Scene (Core Animation layer tree)
 
@@ -38,10 +39,12 @@ final class Scene {
     private var pools: [String: [CALayer]] = [:]
     private var used: [String: Int] = [:]
     private let heroL = CALayer(), markerL = CALayer(), hudL = CALayer(), msgL = CALayer(), helpL = CALayer()
-    private let buttonL = CALayer(), buttonText = CALayer()
-    /// Where the Play/Resume button is, in view points (zero when hidden). The app makes only this clickable.
-    private(set) var buttonRect = CGRect.zero
-    var buttonHot = false
+    private let buttonL = CALayer(), buttonText = CALayer(), changeText = CALayer(), titleL = CALayer()
+    /// Clickable areas in view points ("play", "change", "pick0"...). The app makes only these clickable.
+    private(set) var buttons: [String: CGRect] = [:]
+    var hot: String? = nil
+    var starter = 0                     // index into art.families
+    var picking = false                 // showing "Choose your starter" 
     private var textCache: [String: CGImage] = [:]
     private(set) var size = CGSize.zero, backing: CGFloat = 2
     var effects: [Effect] = []
@@ -53,7 +56,7 @@ final class Scene {
         self.art = art
         root.masksToBounds = true
         root.addSublayer(world)
-        for l in [heroL, markerL, hudL, msgL, helpL, buttonL, buttonText] { pix(l) }
+        for l in [heroL, markerL, hudL, msgL, helpL, buttonL, buttonText, changeText, titleL] { pix(l) }
         buttonL.cornerRadius = 9
         buttonL.borderWidth = 1
         markerL.cornerRadius = 2
@@ -109,6 +112,11 @@ final class Scene {
                 if water { effects.append(Effect(kind: .splash, x: T.heroX, y: -1, life: 0.6)) }
             case .evolved:
                 effects.append(Effect(kind: .burst, x: T.heroX, y: 4, life: 0.5)); cheerUntil = g.clock + 1.6
+            case .defeated(let id):
+                if let t = g.things.first(where: { $0.id == id }) {
+                    effects.append(Effect(kind: .sparkle, x: t.x + t.w / 2, y: 6, life: 0.4))
+                    effects.append(Effect(kind: .text("+25"), x: t.x + t.w / 2, y: 14, life: 0.9))
+                }
             case .smashLanded(let id):
                 if let t = g.things.first(where: { $0.id == id }) { effects.append(Effect(kind: .sparkle, x: t.x + 3, y: 0, life: 0.3)) }
             default: break
@@ -192,6 +200,15 @@ final class Scene {
                 let bob = moving ? (sin(t.t * 5) * 0.8).rounded() : 0
                 sprite("thing", art.orb[moving ? Int(t.t * 8) % art.orb.count : 0], feetX: cx, y: t.y + bob)
             case .pit: break
+            case .grunt: sprite("thing", art.gruntRun[moving ? Int(t.t * 10) % art.gruntRun.count : 0], feetX: cx, y: 0)
+            case .gruntDown:
+                // Knocked flat with swirly eyes, spinning.
+                sprite("thing", art.gruntDown, feetX: cx, y: 0)
+                let l = pooled("thing")
+                let sw = art.swirl[moving ? Int(t.t * 12) % art.swirl.count : 0]
+                put(l, sw, frame(t.x + t.w / 2 + art.gruntDown.w / 2 - 6.5, 1.5, 6, 6))
+            case .thrownOrb, .capOrb:
+                sprite("thing", art.smallOrb[moving ? Int(t.t * 14) % art.smallOrb.count : 0], feetX: cx, y: t.y)
             }
         }
 
@@ -217,22 +234,33 @@ final class Scene {
         }
 
         // Hero.
-        let st = art.hero[g.stage]
+        let st = art.families[min(starter, art.families.count - 1)].stages[g.stage]
+        func pose(_ a: [Sprite], _ i: Int) -> Sprite { a[min(i, a.count - 1)] }
         var hs: Sprite
         switch g.phase {
         case .ready, .over: hs = st.idle[moving ? Int(clock * 4) % st.idle.count : 0]
         default:
             if g.onGround {
-                hs = g.sinceLand < 0.08 ? st.jump[5] : st.run[moving && g.phase == .running ? Int(g.distance / 6) % st.run.count : 0]
-            } else if g.sinceJump < 0.06 { hs = st.jump[0] }
-            else if g.vy > 70 { hs = st.jump[1] } else if g.vy > 20 { hs = st.jump[2] }
-            else if g.vy > -40 { hs = st.jump[3] } else { hs = st.jump[4] }
+                hs = g.sinceLand < 0.08 ? pose(st.jump, 5) : st.run[moving && g.phase == .running ? Int(g.distance / 6) % st.run.count : 0]
+            } else if g.sinceJump < 0.06 { hs = pose(st.jump, 0) }
+            else if g.vy > 70 { hs = pose(st.jump, 1) } else if g.vy > 20 { hs = pose(st.jump, 2) }
+            else if g.vy > -40 { hs = pose(st.jump, 3) } else { hs = pose(st.jump, 4) }
         }
         if heroL.superlayer == nil { world.addSublayer(heroL) }
         heroL.zPosition = 5
         put(heroL, hs.image, frame(T.heroX - hs.anchorX, g.y, hs.w, hs.h))
         heroL.opacity = g.phase == .dying && moving && Int(g.dyingT * 12) % 2 == 1 ? 0.25 : 1
-        heroL.isHidden = g.phase == .dying && g.y < -6
+        heroL.isHidden = (picking && g.phase == .ready) || (g.phase == .dying && g.y < -6) || ((g.phase == .dying || g.phase == .over) && g.captured && g.dyingT > 0.2)
+        if g.captured && (g.phase == .dying || g.phase == .over) {
+            // The capture orb pops open, snaps shut around the gecko, then wobbles three times.
+            let k = g.dyingT
+            let f: Sprite
+            if k < 0.45 { f = art.orbOpen[max(0, min(art.orbOpen.count - 1, art.orbOpen.count - 1 - Int(k / 0.45 * Double(art.orbOpen.count))))] }
+            else if k < 1.45 && moving { f = art.orbBounce[Int((k - 0.45) * 9) % art.orbBounce.count] }
+            else { f = art.orb[0] }
+            let wob = k >= 0.45 && k < 1.45 && moving ? sin((k - 0.45) * 3 * 2 * .pi) * 1.5 : 0
+            sprite("fx", f, feetX: T.heroX + wob, y: 0)
+        }
 
         // Effects.
         for i in effects.indices { effects[i].t += dt }
@@ -246,6 +274,12 @@ final class Scene {
             case .splash:
                 let f = art.splash[min(art.splash.count - 1, Int(k * Double(art.splash.count)))]
                 sprite("fx", f, feetX: e.x, y: -bandDepth + 1)
+            case .text(let str):
+                let l = pooled("fxText")
+                let img = cachedText(str)
+                put(l, img, CGRect(x: CGFloat(e.x) * px - CGFloat(img.width) / backing / 2, y: CGFloat(e.y + bandDepth + k * 8) * px,
+                                    width: CGFloat(img.width) / backing, height: CGFloat(img.height) / backing))
+                l.opacity = Float(1 - k)
             case .burst:
                 let f = art.sparkle[min(art.sparkle.count - 1, Int(k * Double(art.sparkle.count)))]
                 for a in 0..<6 {
@@ -254,7 +288,6 @@ final class Scene {
                 }
             }
         }
-        endPools()
 
         // HUD: tiny and out of the play lane (top right). Messages: centred, only when not running.
         let hud = g.phase == .ready ? (g.best > 0 ? "BEST \(g.best)" : "") : "◆ \(g.orbs)   \(String(format: "%05d", g.score))\(g.best > 0 ? "   BEST \(g.best)" : "")"
@@ -270,20 +303,66 @@ final class Scene {
         setText(helpL, g.phase == .running || g.phase == .evolving || g.phase == .dying ? "" : help, size: 8.5,
                 centerX: size.width / 2, topY: size.height * 0.86 - 15, alpha: 0.85)
 
-        // Play / Resume / Play again button: the only clickable thing while the game isn't running.
-        let label: String? = { switch g.phase { case .ready: return "▶  Play"; case .paused: return "▶  Resume"; case .over: return "▶  Play again"; default: return nil } }()
-        if buttonL.superlayer == nil { root.addSublayer(buttonL); root.addSublayer(buttonText) }
+        // Home screen controls: the only clickable things while the game isn't running.
+        buttons = [:]
+        for l in [buttonL, buttonText, changeText, titleL] where l.superlayer == nil { root.addSublayer(l) }
+        let showPicker = picking && g.phase == .ready
+        let label: String? = showPicker ? nil : { switch g.phase { case .ready: return "▶  Play"; case .paused: return "▶  Resume"; case .over: return "▶  Play again"; default: return nil } }()
         if let label {
             buttonL.isHidden = false
             setText(buttonText, label, size: 10.5, centerX: size.width / 2, topY: size.height * 0.86 - 31, weight: .heavy)
             let t = buttonText.frame
-            buttonRect = CGRect(x: t.midX - max(t.width + 16, 92) / 2, y: t.midY - 11, width: max(t.width + 16, 92), height: 22)
-            buttonL.frame = buttonRect
-            buttonL.backgroundColor = buttonHot ? CGColor(red: 1, green: 0.42, blue: 0.32, alpha: 1) : CGColor(red: 0.88, green: 0.33, blue: 0.27, alpha: 0.95)
-            buttonL.borderColor = CGColor(red: 1, green: 0.9, blue: 0.75, alpha: buttonHot ? 1 : 0.6)
+            let r = CGRect(x: t.midX - max(t.width + 16, 92) / 2, y: t.midY - 11, width: max(t.width + 16, 92), height: 22)
+            buttons["play"] = r
+            buttonL.frame = r
+            let hotPlay = hot == "play"
+            buttonL.backgroundColor = hotPlay ? CGColor(red: 1, green: 0.42, blue: 0.32, alpha: 1) : CGColor(red: 0.88, green: 0.33, blue: 0.27, alpha: 0.95)
+            buttonL.borderColor = CGColor(red: 1, green: 0.9, blue: 0.75, alpha: hotPlay ? 1 : 0.6)
+            if (g.phase == .ready || g.phase == .over) && art.families.count > 1 {
+                setText(changeText, "Change starter", size: 9, leftX: r.maxX + 12, topY: r.midY + 7, weight: .bold, alpha: hot == "change" ? 1 : 0.7)
+                buttons["change"] = changeText.frame
+            } else { changeText.isHidden = true }
         } else {
-            buttonL.isHidden = true; buttonText.isHidden = true; buttonRect = .zero
+            buttonL.isHidden = true; buttonText.isHidden = true; changeText.isHidden = true
         }
+
+        // Choose your starter: one card per family, its first form animating, name underneath.
+        if showPicker {
+            msgL.isHidden = true; helpL.isHidden = true
+            setText(titleL, "CHOOSE YOUR STARTER", size: 10, centerX: size.width / 2, topY: size.height - 2, weight: .heavy)
+            let n = art.families.count, cw: CGFloat = 124, gap: CGFloat = 12
+            let x0 = size.width / 2 - (CGFloat(n) * cw + CGFloat(n - 1) * gap) / 2
+            for (i, f) in art.families.enumerated() {
+                let r = CGRect(x: x0 + CGFloat(i) * (cw + gap), y: 10, width: cw, height: 70)
+                buttons["pick\(i)"] = r
+                let isHot = hot == "pick\(i)"
+                let card = pooled("card")
+                card.contents = nil
+                card.frame = r
+                card.cornerRadius = 10
+                card.backgroundColor = CGColor(red: 0.09, green: 0.1, blue: 0.18, alpha: isHot ? 0.92 : 0.75)
+                card.borderWidth = isHot ? 2 : 1
+                card.borderColor = isHot ? CGColor(red: 1, green: 0.55, blue: 0.4, alpha: 1) : CGColor(gray: 1, alpha: 0.25)
+                card.zPosition = 6
+                let sp = f.stages[0].idle[moving ? Int(clock * 4) % f.stages[0].idle.count : 0]
+                let l = pooled("cardSprite")
+                l.zPosition = 7
+                let sw = CGFloat(sp.w) * px * 1.25, sh = CGFloat(sp.h) * px * 1.25
+                put(l, sp.image, CGRect(x: (r.midX - sw / 2).rounded(), y: r.minY + 22, width: sw, height: sh))
+                let tl = pooled("cardText")
+                tl.zPosition = 7
+                let img = cachedText(f.name)
+                put(tl, img, CGRect(x: (r.midX - CGFloat(img.width) / backing / 2).rounded(), y: r.minY + 4,
+                                    width: CGFloat(img.width) / backing, height: CGFloat(img.height) / backing))
+            }
+        } else { titleL.isHidden = true }
+        endPools()
+    }
+
+    private func cachedText(_ s: String) -> CGImage {
+        let key = "fx|\(s)"
+        if let c = textCache[key] { return c }
+        let i = textImage(s, size: 9, weight: .heavy, alpha: 1, backing: backing); textCache[key] = i; return i
     }
 
     // Text: system font (the bitmap font in the pack has no metrics yet), white with a dark outline.
@@ -357,6 +436,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         scene = Scene(art: art)
         scene.reduceMotion = Prefs.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         scene.scenery = Prefs.scenery
+        if let id = Prefs.starter, let i = art.families.firstIndex(where: { $0.id == id }) { scene.starter = i }
+        else { scene.picking = art.families.count > 1 }          // first launch: choose your starter
 
         panel = StripPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: CGFloat(stripH) * px),
                            styleMask: [.borderless], backing: .buffered, defer: false)
@@ -403,7 +484,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func click() {
         if game.phase == .running || game.phase == .evolving { game.press(); return }
         let p = view.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
-        if scene.buttonRect.contains(p) { play() }
+        guard let id = scene.buttons.first(where: { $0.value.insetBy(dx: -4, dy: -4).contains(p) })?.key else { return }
+        if id == "play" { play() }
+        else if id == "change" { game.phase = .ready; scene.picking = true }
+        else if id.hasPrefix("pick"), let i = Int(id.dropFirst(4)), i < art.families.count {
+            Prefs.starter = art.families[i].id; scene.starter = i; scene.picking = false
+            play()
+        }
     }
 
     @objc func play() {
@@ -411,6 +498,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(view)
+        scene.picking = false
         if game.phase == .paused { game.resume() } else if game.phase != .running && game.phase != .evolving { game.start() }
     }
     @objc func pauseGame() { game.pause() }
@@ -440,10 +528,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let playing = game.phase == .running || game.phase == .evolving || game.phase == .dying
         let m = NSEvent.mouseLocation, f = panel.frame
         let local = CGPoint(x: m.x - f.minX, y: m.y - f.minY)
-        let onButton = !playing && scene.buttonRect.insetBy(dx: -4, dy: -4).contains(local)
+        let hot = playing ? nil : scene.buttons.first(where: { $0.value.insetBy(dx: -4, dy: -4).contains(local) })?.key
+        let onButton = hot != nil
         let mouseOn = playing || onButton
         if panel.ignoresMouseEvents == mouseOn { panel.ignoresMouseEvents = !mouseOn }
-        scene.buttonHot = onButton
+        scene.hot = hot
         setFaded(!playing && !onButton && f.contains(m))
         scene.layout(size: view.bounds.size, backing: panel.backingScaleFactor)
         scene.update(game, dt: dt, help: helpText)
@@ -520,6 +609,9 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return (s.localizedName, "\(id)", id == Prefs.display)
             }, #selector(pickDisplay(_:))))
         }
+        if art.families.count > 1 {
+            menu.addItem(sub("Starter", art.families.enumerated().map { ($0.element.name, "\($0.offset)", $0.offset == scene.starter) }, #selector(pickStarter(_:))))
+        }
         menu.addItem(sub("Width", [("Narrow", "480", Prefs.width == 480), ("Medium", "720", Prefs.width == 720), ("Wide", "1000", Prefs.width == 1000)], #selector(pickWidth(_:))))
         let pos = sub("Position", [("Raise", "2", false), ("Lower", "-2", false), ("Reset", "0", false)], #selector(nudge(_:)))
         pos.submenu?.insertItem(info(placementNote), at: 0)
@@ -538,6 +630,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         p.submenu = m; return p
     }
     @objc func pickDisplay(_ i: NSMenuItem) { Prefs.display = Int(i.representedObject as! String) ?? 0; place() }
+    @objc func pickStarter(_ i: NSMenuItem) {
+        guard let n = Int(i.representedObject as! String), n < art.families.count else { return }
+        scene.starter = n; Prefs.starter = art.families[n].id; scene.picking = false
+    }
     @objc func pickWidth(_ i: NSMenuItem) { Prefs.width = Double(i.representedObject as! String) ?? 720; place() }
     @objc func nudge(_ i: NSMenuItem) { let v = Double(i.representedObject as! String) ?? 0; Prefs.offset = v == 0 ? 0 : max(-20, min(60, Prefs.offset + v)); place() }
     @objc func pickScenery(_ i: NSMenuItem) { Prefs.scenery = Double(i.representedObject as! String) ?? 1; scene.scenery = Prefs.scenery }
@@ -580,6 +676,9 @@ func snapshot(_ args: [String]) {
     let width = CGFloat(Double(arg("--width") ?? "720") ?? 720)
     g.worldW = Double(width / px); g.best = Int(arg("--best") ?? "0") ?? 0
     let scene = Scene(art: art)
+    scene.starter = Int(arg("--starter") ?? "0") ?? 0
+    scene.picking = args.contains("--picker")
+    if let h = arg("--hot") { scene.hot = h }
     if arg("--phase") != "ready" {
         g.autopilot = true; g.start()
         let steps = Int((Double(arg("--seconds") ?? "12") ?? 12) / T.step)
@@ -600,6 +699,7 @@ func record(_ args: [String]) {
     g.worldW = Double(width / px); g.best = Int(arg("--best") ?? "0") ?? 0
     let from = Double(arg("--from") ?? "0") ?? 0, to = Double(arg("--to") ?? "20") ?? 20, fps = Double(arg("--fps") ?? "15") ?? 15
     let scene = Scene(art: art)
+    scene.starter = Int(arg("--starter") ?? "0") ?? 0
     g.autopilot = true; g.start()
     var images: [CGImage] = []
     var t = 0.0
@@ -625,12 +725,15 @@ func selftest() -> Int32 {
 
     // Art: every sheet cut, hero forms at their heights, adult apex inside the strip.
     let art = try! Art(dir: artDir())
-    check(art.hero.count == 3 && art.hero.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 && $0.jump.count == 6 }, "hero frames 3 x (6 idle, 6 run, 6 jump)")
-    for (i, st) in art.hero.enumerated() {
-        let tallest = (st.idle + st.run + st.jump).map(\.h).max()!
-        check(abs(st.idle.map(\.h).max()! - Art.heroHeights[i]) < 0.6, "stage \(i) idle height")
-        let apexTop = T.jumpV * T.jumpV / (2 * T.gravity) + tallest
-        check(apexTop <= T.top, "stage \(i) apex top \(apexTop) within \(T.top)")
+    check(art.families.count == 3, "three starters load (\(art.families.map(\.name)))")
+    for f in art.families {
+        check(f.stages.count == 3 && f.stages.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 && $0.jump.count == 6 }, "\(f.name): 3 x (6 idle, 6 run, 6 jump)")
+        for (i, st) in f.stages.enumerated() {
+            let tallest = (st.idle + st.run + st.jump).map(\.h).max()!
+            check(abs(st.idle.map(\.h).max()! - Art.heroHeights[i]) < 0.6, "\(f.name) stage \(i) idle height")
+            let apexTop = T.jumpV * T.jumpV / (2 * T.gravity) + tallest
+            check(apexTop <= T.top, "\(f.name) stage \(i) apex top \(apexTop) within \(T.top)")
+        }
     }
     check(art.orb.count == 6 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6 && art.crab.count == 6, "orb/sparkle/water/balloon/crab frames")
 
@@ -700,6 +803,24 @@ func selftest() -> Int32 {
     var stages: [Int] = []
     for _ in 0..<Int(90 / T.step) { ev.step(); for e in ev.events { if case .evolved(let s) = e { stages.append(s) } }; ev.events.removeAll() }
     check(stages == [1, 2], "evolutions in order once each: \(stages)")
+
+    // Grunt ambush: a rolling capture orb captures you; jumping over a grunt defeats it.
+    let cap = Game(seed: 1); cap.start(); cap.gapLeft = 1e9
+    cap.things = [Thing(id: 5, kind: .capOrb, x: T.heroX + 6, w: 5, h: 5, vx: 8)]
+    run(cap, 0.3)
+    check(cap.captured && (cap.phase == .dying || cap.phase == .over), "a capture orb captures the hero")
+    let gj = Game(seed: 1); gj.start(); gj.gapLeft = 1e9
+    gj.things = [Thing(id: 6, kind: .grunt, x: T.heroX + 60, w: 7, h: 8, vx: 10)]
+    gj.autopilot = true; run(gj, 1.5)
+    check(gj.phase == .running && gj.defeats == 1 && gj.bonus == 25, "jumping over a grunt defeats it (+25)")
+    var ambushes = 0, defeats = 0
+    for seed in 1...6 {
+        let g = Game(seed: UInt64(seed)); g.autopilot = true; g.start()
+        run(g, 240)
+        ambushes += g.ambushes; defeats += g.defeats
+    }
+    print("ambushes: \(ambushes), grunts defeated: \(defeats)")
+    check(ambushes > 0 && defeats > 0, "grunt ambushes happen and grunts get defeated")
 
     // Restart resets the run but keeps the best score.
     ev.best = 500; ev.start()

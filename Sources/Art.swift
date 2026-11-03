@@ -133,13 +133,19 @@ func makeSprite(_ c: Cut, k: Double) -> Sprite {
 /// All sprites the game uses. Original-mode art only.
 final class Art {
     struct Stage { let idle: [Sprite]; let run: [Sprite]; let jump: [Sprite] }
-    let hero: [Stage]                 // hatchling, adolescent, adult drake
+    struct Family { let id: String; let name: String; let stages: [Stage] }
+    /// Starter families that loaded (the ember gecko always; the others if their sheet is present and cuts cleanly).
+    let families: [Family]
+    var hero: [Stage] { families[0].stages }
     let orb: [Sprite], orbBounce: [Sprite], orbOpen: [Sprite], sparkle: [Sprite]
     let rockSmall: Sprite, boulder: Sprite, spike: Sprite, spikes3: Sprite, crate: Sprite
     let signWater: Sprite, signWarn: Sprite
     let crab: [Sprite], mole: [Sprite]
     let explorerCheer: [Sprite]
     let balloon: [Sprite]
+    let gruntIdle: [Sprite], gruntRun: [Sprite], gruntDown: Sprite   // moth-gang grunt; knocked flat
+    let smallOrb: [Sprite]             // thrown capture orbs (smaller than the collectible ones)
+    let swirl: [CGImage]               // cartoon dizzy-eyes swirl, 4 rotation frames
     let ground: [CGImage]              // per biome: a thin top strip (16 x 4 logical) that tiles
     let soil: [CGImage]                // per biome: fill under the surface (16 x 16)
     let water: [CGImage], splash: [Sprite]
@@ -149,14 +155,24 @@ final class Art {
     static let heroHeights: [Double] = [16, 20, 24]
 
     init(dir: URL) throws {
-        let gecko = cutSheet(try loadSheet(dir, "ember-gecko-evolutions"), cols: 6, rows: 9)
         func row(_ r: Int, in sheet: [[Cut?]]) -> [Cut] { sheet[r].compactMap { $0 } }
-        hero = (0..<3).map { s in
-            let idle = row(s * 3, in: gecko), run = row(s * 3 + 1, in: gecko), jump = row(s * 3 + 2, in: gecko)
-            // One scale per stage from the idle pose, so running/jumping poses keep their true size relative to it.
-            let k = Art.heroHeights[s] / Double(idle.map(\.h).max()!)
-            return Stage(idle: idle.map { makeSprite($0, k: k) }, run: run.map { makeSprite($0, k: k) }, jump: jump.map { makeSprite($0, k: k) })
+        func family(_ file: String) throws -> [Stage]? {
+            let sheet = cutSheet(try loadSheet(dir, file), cols: 6, rows: 9)
+            guard sheet.allSatisfy({ $0.compactMap { $0 }.count >= 2 }) else { return nil }   // a draft that didn't cut cleanly
+            return (0..<3).map { s in
+                let idle = row(s * 3, in: sheet), run = row(s * 3 + 1, in: sheet), jump = row(s * 3 + 2, in: sheet)
+                // One scale per stage from the idle pose, so running/jumping poses keep their true size relative to it.
+                let k = Art.heroHeights[s] / Double(idle.map(\.h).max()!)
+                return Stage(idle: idle.map { makeSprite($0, k: k) }, run: run.map { makeSprite($0, k: k) }, jump: jump.map { makeSprite($0, k: k) })
+            }
         }
+        var fams = [Family(id: "ember", name: "Ember Gecko", stages: try family("ember-gecko-evolutions")!)]
+        for (id, file, name) in [("thistle", "thistle-hedgehog-evolutions", "Thistle Hedgehog"), ("ripple", "ripple-newt-evolutions", "Ripple Newt")] {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(file + ".png").path), let st = try family(file) {
+                fams.append(Family(id: id, name: name, stages: st))
+            }
+        }
+        families = fams
 
         let objs = cutSheet(try loadSheet(dir, "orbs-obstacles-signs"), cols: 6, rows: 6, minBlob: 6)
         let orbK = 9 / Double(row(0, in: objs).map(\.h).max()!)
@@ -164,6 +180,7 @@ final class Art {
         orbBounce = row(1, in: objs).map { makeSprite($0, k: orbK) }
         orbOpen = row(2, in: objs).map { makeSprite($0, k: orbK) }
         sparkle = row(3, in: objs).map { makeSprite($0, k: orbK) }
+        smallOrb = row(0, in: objs).map { makeSprite($0, k: orbK * 6 / 9) }
         let props = objs[4]
         func sized(_ c: Cut?, h: Double) -> Sprite { let c = c!; return makeSprite(c, k: h / Double(c.h)) }
         rockSmall = sized(props[0], h: 6); boulder = sized(props[1], h: 8)
@@ -181,6 +198,11 @@ final class Art {
         let gang = cutSheet(try loadSheet(dir, "moth-balloon-gang"), cols: 6, rows: 6)
         let balK = 34 / Double(row(0, in: gang).map(\.h).max()!)
         balloon = row(0, in: gang).map { makeSprite($0, k: balK) }
+        let gK = 12 / Double(row(3, in: gang).map(\.h).max()!)
+        gruntIdle = row(3, in: gang).map { makeSprite($0, k: gK) }
+        gruntRun = row(4, in: gang).map { makeSprite($0, k: gK) }
+        gruntDown = makeSprite(rotateCut(row(3, in: gang)[0]), k: gK)
+        swirl = (0..<4).map { swirlImage(phase: Double($0) / 4) }
 
         let terrain = cutSheet(try loadSheet(dir, "terrain-water-lava"), cols: 6, rows: 6, minBlob: 6)
         func tile(_ c0: Cut, w: Double, h: Double, top: Double) -> CGImage {
@@ -205,4 +227,32 @@ final class Art {
             [sized(para[b][0], h: 14), sized(para[b][1], h: 12), sized(para[b][2], h: 6)]
         }
     }
+}
+
+/// Turns a standing sprite onto its back (90 degrees), for the knocked-over grunt.
+func rotateCut(_ c: Cut) -> Cut {
+    let ctx = CGContext(data: nil, width: c.h, height: c.w, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.translateBy(x: CGFloat(c.h), y: 0)
+    ctx.rotate(by: .pi / 2)
+    ctx.draw(c.image, in: CGRect(x: 0, y: 0, width: c.w, height: c.h))
+    return Cut(image: ctx.makeImage()!, w: c.h, h: c.w)
+}
+
+/// A little spiral (6 x 6 logical px) in the art's outline style: the classic "dizzy eyes".
+func swirlImage(phase: Double) -> CGImage {
+    let n = Int(6 * artRes)
+    let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    let c = CGFloat(n) / 2
+    let path = CGMutablePath()
+    for i in 0...60 {
+        let t = Double(i) / 60, a = (t * 2.2 + phase) * 2 * .pi, r = CGFloat(0.5 + t * 0.42) * c
+        let p = CGPoint(x: c + cos(a) * r, y: c + sin(a) * r)
+        if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+    }
+    ctx.setLineCap(.round)
+    ctx.addPath(path); ctx.setStrokeColor(CGColor(red: 0.09, green: 0.1, blue: 0.2, alpha: 1)); ctx.setLineWidth(artRes * 1.1); ctx.strokePath()
+    ctx.addPath(path); ctx.setStrokeColor(CGColor(red: 1, green: 0.92, blue: 0.55, alpha: 1)); ctx.setLineWidth(artRes * 0.5); ctx.strokePath()
+    return ctx.makeImage()!
 }

@@ -43,6 +43,10 @@ enum Phase: Equatable { case ready, running, evolving, paused, dying, over }
 
 enum Kind: Equatable {
     case rock, spike, crate, boulder, crab, mole       // ground hazards
+    case grunt                                          // moth-gang grunt: jump over it to defeat it
+    case gruntDown                                      // defeated grunt (scenery, swirly eyes)
+    case thrownOrb                                      // capture orb in flight; harmless until it lands
+    case capOrb                                         // capture orb rolling on the ground: touching it captures you
     case pit                                            // a real gap in the ground, water below
     case sign                                           // wave warning before a pit (scenery)
     case orb
@@ -59,7 +63,7 @@ struct Thing {
     var vy = 0.0                 // falling rock
     var t = 0.0                  // age, for animation
     var gone = false
-    var isHazard: Bool { switch kind { case .rock, .spike, .crate, .boulder, .crab, .mole: return true; default: return false } }
+    var isHazard: Bool { switch kind { case .rock, .spike, .crate, .boulder, .crab, .mole, .grunt, .capOrb: return true; default: return false } }
 }
 
 struct HazardSpec { let kind: Kind; let w: Double; let h: Double; let vx: Double }
@@ -87,7 +91,7 @@ func jumpWindow(w: Double, h: Double, v: Double) -> Double {
 /// Pits: the hero falls only when its whole body is over water, so the dangerous span is (w - body).
 func pitWindow(w: Double, v: Double) -> Double { 2 * T.jumpV / T.gravity - max(0, w - T.bodyW) / v }
 
-enum Event { case jumped, landed, orb(Int), died(water: Bool), evolved(Int), smashLanded(Int), balloonDrop }
+enum Event { case jumped, landed, orb(Int), died(water: Bool), evolved(Int), smashLanded(Int), balloonDrop, captured, defeated(Int), orbLanded(Int) }
 
 final class Game {
     var phase = Phase.ready
@@ -124,7 +128,11 @@ final class Game {
         var rockID: Int? = nil
     }
 
-    var score: Int { Int(distance / T.distPerPoint) + T.pointsPerOrb * orbs }
+    var bonus = 0                  // +25 per defeated grunt
+    var captured = false           // the run ended in a capture orb (for the animation)
+    var ambushes = 0, defeats = 0, lastAmbush = -1e9
+    var scheduled: [(at: Double, what: Int)] = []   // ambush timeline: 0 = throw an orb, 1 = grunt runs in
+    var score: Int { Int(distance / T.distPerPoint) + T.pointsPerOrb * orbs + bonus }
 
     init(seed: UInt64 = UInt64.random(in: 1...UInt64.max)) { rng = RNG(s: seed) }
 
@@ -147,6 +155,7 @@ final class Game {
         speed = T.startSpeed; active = 0; distance = 0; orbs = 0
         stage = 0; pendingStage = nil; evolveT = 0; evolutions = 0
         things = []; nextID = 1; events = []
+        bonus = 0; captured = false; scheduled = []; lastAmbush = -1e9
         gapLeft = T.startSpeed * T.onboarding; lastRight = -1e9
         balloon = nil; lastBalloonEnd = -1e9
     }
@@ -163,7 +172,7 @@ final class Game {
         case .dying:
             dyingT += dt
             if falling { vy -= T.gravity * dt; y = max(y + vy * dt, -30) }
-            if dyingT > 0.6 { phase = .over }
+            if dyingT > (captured ? 1.6 : 0.6) { phase = .over }      // the capture wobble takes a little longer
             return
         case .evolving:
             evolveT += dt
@@ -194,6 +203,10 @@ final class Game {
                 things[i].y = max(0, things[i].y + things[i].vy * dt)
                 if things[i].y == 0 { things[i].kind = .rock; events.append(.smashLanded(things[i].id)) }   // same entity becomes the hazard
             }
+            if things[i].kind == .thrownOrb {
+                things[i].y += things[i].vy * dt - 200 * dt * dt; things[i].vy -= 400 * dt
+                if things[i].y <= 0 { things[i].y = 0; things[i].kind = .capOrb; things[i].vx = 8; events.append(.orbLanded(things[i].id)) }
+            }
         }
         lastRight -= move
         if var b = balloon {
@@ -201,6 +214,21 @@ final class Game {
             if b.stage == .retreat && b.x > worldW + 40 { balloon = nil; lastBalloonEnd = active } else { balloon = b }
         }
         things.removeAll { $0.x + $0.w < -40 }
+        while let next = scheduled.first, active >= next.at {
+            scheduled.removeFirst()
+            if next.what == 0 {   // thrown from just past the right edge: arcs in, lands, rolls toward you
+                var o = add(.thrownOrb, x: worldW + 8, y: 18, w: 5, h: 5, vx: 35); o.vy = 60
+                if let i = things.firstIndex(where: { $0.id == o.id }) { things[i].vy = 60 }
+                _ = o
+            } else {
+                _ = add(.grunt, x: worldW + 4, w: 7, h: 8, vx: 10)
+            }
+        }
+        // A grunt that went past without touching you was jumped over: it's defeated.
+        for i in things.indices where things[i].kind == .grunt && things[i].x + things[i].w < T.heroX - T.bodyW / 2 {
+            things[i].kind = .gruntDown; things[i].vx = 0; bonus += 25; defeats += 1
+            events.append(.defeated(things[i].id))
+        }
 
         let support = !overPit()
         if !onGround {
@@ -217,7 +245,10 @@ final class Game {
         // 3. Lethal collisions first.
         let bx0 = T.heroX - T.bodyW / 2, bx1 = T.heroX + T.bodyW / 2
         for t in things where t.isHazard && !t.gone {
-            if t.x < bx1 && t.x + t.w > bx0 && y < t.y + t.h && y + T.bodyH > t.y { die(water: false); return }
+            if t.x < bx1 && t.x + t.w > bx0 && y < t.y + t.h && y + T.bodyH > t.y {
+                if t.kind == .capOrb { captured = true; events.append(.captured) }
+                die(water: false); return
+            }
         }
         // 4. Still alive: collect orbs once.
         for i in things.indices where things[i].kind == .orb && !things[i].gone {
@@ -236,7 +267,8 @@ final class Game {
             gapLeft -= move
             let balloonArriving = balloon.map { $0.stage == .enter || $0.stage == .hover } ?? false
             if gapLeft <= 0 && (worldW + 4) - lastRight >= 0 && !balloonArriving { spawn() }   // keep its drop zone clear
-            if balloon == nil && active >= T.balloonFrom && active - lastBalloonEnd >= T.balloonCooldown && rng.unit() < 0.004 {
+            let ambushOn = !scheduled.isEmpty || things.contains { $0.kind == .grunt || $0.kind == .capOrb || $0.kind == .thrownOrb }
+            if balloon == nil && !ambushOn && active >= T.balloonFrom && active - lastBalloonEnd >= T.balloonCooldown && rng.unit() < 0.004 {
                 balloon = Balloon(x: worldW + 30, y: 10); balloonVisits += 1
             }
         }
@@ -268,6 +300,18 @@ final class Game {
         let gapT = active < 20 ? rng.range(1.4, 2.2) : rng.range(0.95, 1.7)
         var right = x0
         let roll = rng.unit()
+        let ambushOK = active >= 30 && active - lastAmbush >= 18 && balloon == nil && scheduled.isEmpty
+            && (worldW + 4 - lastRight) >= v * 0.95 + 70
+            && jumpWindow(w: 5, h: 5, v: v + 8) >= T.minWindow && jumpWindow(w: 7, h: 8, v: v + 10) >= T.minWindow
+        if ambushOK && rng.unit() < 0.35 {
+            // Grunt ambush: two orbs thrown 0.95 s apart (they land and roll in on the same path, so they
+            // arrive 0.95 s apart), then the grunt runs in 2.0 s after the first throw.
+            scheduled = [(active, 0), (active + 0.95, 0), (active + 2.0, 1)]
+            ambushes += 1; lastAmbush = active
+            lastRight = x0 + v * 2.0 + 7
+            gapLeft = v * 2.0 + 7 + v * gapT
+            return
+        }
         if active >= T.pitsFrom && roll < 0.22 {
             // Wave sign first (decorative), then the pit 1.2 s later.
             let w = rng.range(12, 18).rounded()
