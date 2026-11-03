@@ -192,12 +192,22 @@ final class Art {
         let expK = 18 / Double(row(5, in: critters).map(\.h).max()!)
         explorerCheer = row(5, in: critters).map { makeSprite($0, k: expK) }
 
-        let gang = cutSheet(try loadSheet(dir, "team-rocket"), cols: 6, rows: 9)
-        guard [0, 3, 4, 6, 7].allSatisfy({ row($0, in: gang).count == 6 }) else { throw ArtError.invalidSheet("team-rocket") }
-        let balK = 34 / Double(row(0, in: gang).map(\.h).max()!)
-        balloon = row(0, in: gang).map { makeSprite($0, k: balK) }
-        gangMembers = [3, 6].map { r in
-            let idle = row(r, in: gang), run = row(r + 1, in: gang)
+        let gangSheet = try loadSheet(dir, "team-rocket")
+        // The balloon's dropped rocks overlap the inferred row bands. Slice the known pose bands first
+        // so a rock above Jessie's head cannot inflate her idle bounds and shrink every running frame.
+        func gangRow(_ top: Double, _ bottom: Double) throws -> [Cut] {
+            let scale = Double(gangSheet.height) / 1536
+            let rect = CGRect(x: 0, y: (top * scale).rounded(), width: Double(gangSheet.width), height: ((bottom - top) * scale).rounded())
+            guard let image = gangSheet.cropping(to: rect) else { throw ArtError.invalidSheet("team-rocket") }
+            let frames = cutSheet(image, cols: 6, rows: 1)[0].compactMap { $0 }
+            guard frames.count == 6 else { throw ArtError.invalidSheet("team-rocket") }
+            return frames
+        }
+        let balloonFrames = try gangRow(0, 200)
+        let balK = 34 / Double(balloonFrames.map(\.h).max()!)
+        balloon = balloonFrames.map { makeSprite($0, k: balK) }
+        gangMembers = try [(600.0, 770.0, 915.0), (1070.0, 1230.0, 1375.0)].map { top, middle, bottom in
+            let idle = try gangRow(top, middle), run = try gangRow(middle, bottom)
             let k = 12 / Double(idle.map(\.h).max()!)
             return GangMember(idle: idle.map { makeSprite($0, k: k) }, run: run.map { makeSprite($0, k: k) },
                               down: makeSprite(rotateCut(idle[0]), k: k))

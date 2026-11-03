@@ -731,6 +731,9 @@ func selftest() -> Int32 {
     check(art.families.count == 3, "three starters load (\(art.families.map(\.name)))")
     check(art.families.map(\.id) == ["charmander", "bulbasaur", "squirtle"], "Pokémon starter sheets are active")
     check(art.gangMembers.count == 2 && art.gangMembers.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 }, "Jessie and James animation frames load")
+    for member in art.gangMembers {
+        check((member.idle + member.run).allSatisfy { $0.h >= 9 && $0.h <= 13 }, "Team Rocket poses retain consistent character size")
+    }
     for f in art.families {
         check(f.stages.count == 3 && f.stages.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 && $0.jump.count == 6 }, "\(f.name): 3 x (6 idle, 6 run, 6 jump)")
         for (i, st) in f.stages.enumerated() {
