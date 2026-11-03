@@ -15,6 +15,8 @@ The characters are Pokémon designs, not original Embertrail characters. This is
 
 The red-and-white capture balls and their opening animation are drawn with Core Graphics in `Sources/Art.swift`; they are not extracted from the supplied sheets.
 
+The eight-fruit sheet `Resources/Art/power-fruits.png` was supplied by the user on 3 November 2026 and copied unchanged. Its transparent sprites are sliced into two rows of four at runtime.
+
 ## Original Embertrail art
 
 The scenery, terrain, obstacles, orbs, critters, explorer, and unused bitmap font are AI-generated drafts from the original Embertrail art set. The previous gecko, hedgehog, newt, and moth-gang sheets remain in the repository but are no longer selected by the game.

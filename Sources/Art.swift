@@ -137,7 +137,7 @@ final class Art {
     /// All three starter families, each with three evolution stages.
     let families: [Family]
     var hero: [Stage] { families[0].stages }
-    let orb: [Sprite], sparkle: [Sprite]
+    let fruits: [Sprite], sparkle: [Sprite]
     let captureClosed: [Sprite], captureOpen: [Sprite]
     let rockSmall: Sprite, boulder: Sprite, spike: Sprite, spikes3: Sprite, crate: Sprite
     let signWater: Sprite, signWarn: Sprite
@@ -150,7 +150,7 @@ final class Art {
     let swirl: [CGImage]               // cartoon dizzy-eyes swirl, 4 rotation frames
     let ground: [CGImage]              // per biome: a thin top strip (16 x 4 logical) that tiles
     let soil: [CGImage]                // per biome: fill under the surface (16 x 16)
-    let water: [CGImage], splash: [Sprite]
+    let water: [CGImage], lava: [CGImage], splash: [Sprite]
     let parallax: [[Sprite]]           // [biome][far, mid, near]
     let biomeDeco: [Sprite]            // flowers, crystals, ember rocks
 
@@ -174,14 +174,17 @@ final class Art {
 
         let objs = cutSheet(try loadSheet(dir, "orbs-obstacles-signs"), cols: 6, rows: 6, minBlob: 6)
         let orbK = 9 / Double(row(0, in: objs).map(\.h).max()!)
-        orb = row(0, in: objs).map { makeSprite($0, k: orbK) }
+        let fruitSheet = cutSheet(try loadSheet(dir, "power-fruits"), cols: 4, rows: 2)
+        let fruitFrames = fruitSheet.flatMap { $0.compactMap { $0 } }
+        guard fruitFrames.count == Fruit.allCases.count else { throw ArtError.invalidSheet("power-fruits") }
+        fruits = fruitFrames.map { makeSprite($0, k: T.fruitSize / Double(max($0.w, $0.h))) }
         sparkle = row(3, in: objs).map { makeSprite($0, k: orbK) }
         captureClosed = (0..<6).map { _ in captureBallSprite(open: 0) }
         captureOpen = (0..<6).map { captureBallSprite(open: Double($0) / 5) }
         smallOrb = (0..<6).map { _ in captureBallSprite(open: 0, size: 6) }
         let props = objs[4]
         func sized(_ c: Cut?, h: Double) -> Sprite { let c = c!; return makeSprite(c, k: h / Double(c.h)) }
-        rockSmall = sized(props[0], h: 6); boulder = sized(props[1], h: 8)
+        rockSmall = sized(props[0], h: 8); boulder = sized(props[1], h: 10)
         spike = sized(props[3], h: 8); spikes3 = sized(props[4], h: 8); crate = sized(props[5], h: 9)
         signWater = sized(objs[5][1], h: 13); signWarn = sized(objs[5][2], h: 13)
 
@@ -228,6 +231,7 @@ final class Art {
         soil = (0..<3).map { b in tile(terrain[b][4]!, w: 16, h: 4, top: 4) }
         let waterK = 16 / Double(terrain[3][0]!.w)
         water = row(3, in: terrain).map { makeSprite($0, k: waterK).image }
+        lava = row(5, in: terrain).map { makeSprite($0, k: 16 / Double($0.w)).image }
         splash = row(4, in: terrain).map { makeSprite($0, k: 10 / Double(row(4, in: terrain).map(\.h).max()!)) }
         biomeDeco = (0..<3).map { b in sized(terrain[b][5], h: 6) }
 

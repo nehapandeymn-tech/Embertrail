@@ -39,7 +39,7 @@ final class Scene {
     private let world = CALayer()
     private var pools: [String: [CALayer]] = [:]
     private var used: [String: Int] = [:]
-    private let heroL = CALayer(), markerL = CALayer(), hudL = CALayer(), msgL = CALayer(), helpL = CALayer()
+    private let heroL = CALayer(), markerL = CALayer(), hudL = CALayer(), powerL = CALayer(), msgL = CALayer(), helpL = CALayer()
     private let buttonL = CALayer(), buttonText = CALayer(), changeText = CALayer(), titleL = CALayer()
     /// Clickable areas in view points ("play", "change", "pick0"...). The app makes only these clickable.
     private(set) var buttons: [String: CGRect] = [:]
@@ -57,7 +57,7 @@ final class Scene {
         self.art = art
         root.masksToBounds = true
         root.addSublayer(world)
-        for l in [heroL, markerL, hudL, msgL, helpL, buttonL, buttonText, changeText, titleL] { pix(l) }
+        for l in [heroL, markerL, hudL, powerL, msgL, helpL, buttonL, buttonText, changeText, titleL] { pix(l) }
         buttonL.cornerRadius = 9
         buttonL.borderWidth = 1
         markerL.cornerRadius = 2
@@ -107,8 +107,11 @@ final class Scene {
     func consume(_ events: [Event], _ g: Game) {
         for e in events {
             switch e {
-            case .orb(let id):
-                if let t = g.things.first(where: { $0.id == id }) { effects.append(Effect(kind: .sparkle, x: t.x + t.w / 2, y: t.y, life: 0.45)) }
+            case .fruit(let id):
+                if let t = g.things.first(where: { $0.id == id }) {
+                    effects.append(Effect(kind: .sparkle, x: t.x + t.w / 2, y: t.y, life: 0.45))
+                    effects.append(Effect(kind: .text("\(t.fruit.label) +\(t.fruit.points)"), x: g.heroX + 20, y: g.y + 24, life: 1.1))
+                }
             case .died(let water):
                 if water { effects.append(Effect(kind: .splash, x: g.heroX, y: -1, life: 0.6)) }
             case .evolved:
@@ -174,17 +177,23 @@ final class Scene {
             }
             tx += 16
         }
-        let waterFrame = art.water[moving ? Int(clock * 5) % art.water.count : 0]
-        for (a, b) in pits {
-            var x = a
-            while x < b {
-                let w = min(16, b - x)
-                let l = pooled("water")
-                if (l.contents as AnyObject?) !== waterFrame { l.contents = waterFrame }
+        for pit in g.things where pit.kind == .pit {
+            var x = pit.x
+            while x < pit.x + pit.w {
+                let w = min(16, pit.x + pit.w - x)
+                let l = pooled("pitSurface")
+                let frames = pit.pitType == .magma ? art.lava : (pit.pitType == .rock ? [art.soil[1]] : art.water)
+                let img = frames[moving ? Int(clock * 5) % frames.count : 0]
+                l.contents = img
                 l.contentsRect = CGRect(x: 0, y: 0, width: w / 16, height: 1)
-                let h = Double(waterFrame.height) / Double(artRes)
-                l.frame = frame(x, -0.6 - h + 2, w, h)
+                l.frame = frame(x, -bandDepth, w, bandDepth + 1)
+                if pit.pitType == .rock { sprite("pitRubble", art.rockSmall, feetX: x + w / 2, y: -6) }
                 x += 16
+            }
+            if g.canCross(pit.pitType) {
+                let safe = pooled("safePit")
+                safe.backgroundColor = CGColor(red: 0.55, green: 1, blue: 0.65, alpha: 0.8)
+                safe.frame = frame(pit.x, 0, pit.w, 0.75)
             }
         }
 
@@ -193,14 +202,18 @@ final class Scene {
             let cx = t.x + t.w / 2
             switch t.kind {
             case .rock: sprite("thing", art.rockSmall, feetX: cx, y: t.y)
-            case .spike: sprite("thing", art.spike, feetX: cx, y: 0)
+            case .spike: put(pooled("thing"), art.spikes3.image, frame(t.x, 0, t.w, t.h))
             case .crate: sprite("thing", art.crate, feetX: cx, y: 0)
             case .boulder: sprite("thing", art.boulder, feetX: cx, y: 0)
             case .mole: sprite("thing", art.mole[moving ? Int(t.t * 9) % art.mole.count : 0], feetX: cx, y: 0)
-            case .sign: sprite("thing", art.signWater, feetX: cx, y: 0)
-            case .orb:
+            case .sign:
+                sprite("thing", t.pitType == .water ? art.signWater : art.signWarn, feetX: cx, y: 0)
+                let label = cachedText(t.pitType.label)
+                let w = Double(label.width) / Double(backing * px), h = Double(label.height) / Double(backing * px)
+                put(pooled("pitLabel"), label, frame(cx - w / 2, 15, w, h))
+            case .fruit:
                 let bob = moving ? (sin(t.t * 5) * 0.8).rounded() : 0
-                sprite("thing", art.orb[moving ? Int(t.t * 8) % art.orb.count : 0], feetX: cx, y: t.y + bob)
+                sprite("thing", art.fruits[t.fruit.rawValue], feetX: cx, y: t.y + bob)
             case .pit: break
             case .fallingTrap:
                 sprite("thing", art.captureClosed[0], feetX: cx, y: t.y)
@@ -257,7 +270,7 @@ final class Scene {
         }
         if heroL.superlayer == nil { world.addSublayer(heroL) }
         heroL.zPosition = 5
-        put(heroL, hs.image, frame(g.heroX - hs.anchorX, g.y, hs.w, hs.h))
+        put(heroL, hs.image, frame(g.heroX - hs.anchorX * g.heroScale, g.y, hs.w * g.heroScale, hs.h * g.heroScale))
         let hitFlash = g.crateHitT > 0 && moving && Int(g.crateHitT * 16) % 2 == 1
         heroL.opacity = g.phase == .dying && moving && Int(g.dyingT * 12) % 2 == 1 ? 0.25 : (hitFlash ? 0.55 : 1)
         heroL.isHidden = (picking && g.phase == .ready) || (g.phase == .dying && g.y < -6) || ((g.phase == .dying || g.phase == .over) && g.captured && g.dyingT > 0.2)
@@ -300,8 +313,14 @@ final class Scene {
         }
 
         // HUD: tiny and out of the play lane (top right). Messages: centred, only when not running.
-        let hud = g.phase == .ready ? (g.best > 0 ? "BEST \(g.best)" : "") : "◆ \(g.orbs)   \(String(format: "%05d", g.score))\(g.best > 0 ? "   BEST \(g.best)" : "")"
+        let nextEvolution = g.stage < T.evolveScores.count ? "   EVOLVE \(T.evolveScores[g.stage])" : "   FINAL FORM"
+        let hud = g.phase == .ready ? (g.best > 0 ? "BEST \(g.best)" : "") : "SCORE \(g.score)   FRUIT \(g.fruitsCollected)\(nextEvolution)"
         setText(hudL, hud, size: 9, leftX: 8, topY: size.height - 4)       // top left: the balloon hovers on the right
+        let powerText = Fruit.allCases.compactMap { fruit -> String? in
+            guard let remaining = g.powers[fruit] else { return nil }
+            return "\(fruit.label) \(Int(ceil(remaining)))s"
+        }.joined(separator: " · ")
+        setText(powerL, powerText, size: 9, leftX: 8, topY: size.height - 20, weight: .heavy)
         var msg = ""
         switch g.phase {
         case .ready: msg = "EMBERTRAIL"
@@ -458,6 +477,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let id = Prefs.starter, let i = art.families.firstIndex(where: { $0.id == id }) { scene.starter = i }
         else { scene.picking = art.families.count > 1 }          // first launch: choose your starter
 
+        game.element = Element(rawValue: scene.starter) ?? .fire
+
         panel = StripPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: CGFloat(stripH) * px),
                            styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
@@ -517,7 +538,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if id == "play" { play() }
         else if id == "change" { game.phase = .ready; scene.picking = true }
         else if id.hasPrefix("pick"), let i = Int(id.dropFirst(4)), i < art.families.count {
-            Prefs.starter = art.families[i].id; scene.starter = i; scene.picking = false
+            Prefs.starter = art.families[i].id; scene.starter = i; game.element = Element(rawValue: i) ?? .fire; scene.picking = false
             play()
         }
     }
@@ -630,7 +651,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if game.phase != .ready { menu.addItem(item("Restart", #selector(restart))) }
         menu.addItem(info("    Space or ↑ jump · Esc pause · Enter start"))
-        menu.addItem(info("    Water pits are deadly for every form"))
+        menu.addItem(info("    Fire: magma · Water: water · Grass: rock pits"))
+        menu.addItem(info("    Evolution: 300 and 800 score"))
+        let fruitMenu = NSMenuItem(title: "Fruit powers", action: nil, keyEquivalent: "")
+        let fruitSubmenu = NSMenu()
+        for description in ["Heart: +75 points", "Dark blue: giant for 6s", "Lightning: speed + automatic dodge for 6s",
+                            "Green: one-hit shield for 8s", "Purple: fruit magnet for 6s", "Flame: magma walking for 6s",
+                            "Ice blue: water walking for 6s", "Star: protection for 5s"] {
+            fruitSubmenu.addItem(info(description))
+        }
+        fruitMenu.submenu = fruitSubmenu; menu.addItem(fruitMenu)
         menu.addItem(.separator())
 
         if NSScreen.screens.count > 1 {
@@ -662,7 +692,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func pickDisplay(_ i: NSMenuItem) { Prefs.display = Int(i.representedObject as! String) ?? 0; place() }
     @objc func pickStarter(_ i: NSMenuItem) {
         guard let n = Int(i.representedObject as! String), n < art.families.count else { return }
-        scene.starter = n; Prefs.starter = art.families[n].id; scene.picking = false
+        scene.starter = n; game.element = Element(rawValue: n) ?? .fire; Prefs.starter = art.families[n].id; scene.picking = false
     }
     @objc func pickWidth(_ i: NSMenuItem) { Prefs.width = Double(i.representedObject as! String) ?? 720; place() }
     @objc func nudge(_ i: NSMenuItem) { let v = Double(i.representedObject as! String) ?? 0; Prefs.offset = v == 0 ? 0 : max(-20, min(60, Prefs.offset + v)); place() }
@@ -706,7 +736,8 @@ func snapshot(_ args: [String]) {
     let width = CGFloat(Double(arg("--width") ?? "720") ?? 720)
     g.worldW = Double(width / px); g.best = Int(arg("--best") ?? "0") ?? 0
     let scene = Scene(art: art)
-    scene.starter = Int(arg("--starter") ?? "0") ?? 0
+    scene.starter = min(2, max(0, Int(arg("--starter") ?? "0") ?? 0))
+    g.element = Element(rawValue: scene.starter) ?? .fire
     scene.picking = args.contains("--picker")
     if let h = arg("--hot") { scene.hot = h }
     if arg("--phase") != "ready" {
@@ -717,7 +748,7 @@ func snapshot(_ args: [String]) {
     let img = renderFrame(scene, g, width: width, backing: 2, dt: 0)
     let d = CGImageDestinationCreateWithURL(URL(fileURLWithPath: arg("--snapshot")!) as CFURL, "public.png" as CFString, 1, nil)!
     CGImageDestinationAddImage(d, img, nil); CGImageDestinationFinalize(d)
-    print("wrote \(arg("--snapshot")!): phase \(g.phase) stage \(g.stage) score \(g.score) orbs \(g.orbs) t \(String(format: "%.1f", g.active))")
+    print("wrote \(arg("--snapshot")!): phase \(g.phase) stage \(g.stage) score \(g.score) fruits \(g.fruitsCollected) t \(String(format: "%.1f", g.active))")
 }
 
 /// Embertrail --record out.gif [--from 0 --to 20 --fps 15 --seed 4] — the bot plays, every frame rendered like the app.
@@ -729,7 +760,8 @@ func record(_ args: [String]) {
     g.worldW = Double(width / px); g.best = Int(arg("--best") ?? "0") ?? 0
     let from = Double(arg("--from") ?? "0") ?? 0, to = Double(arg("--to") ?? "20") ?? 20, fps = Double(arg("--fps") ?? "15") ?? 15
     let scene = Scene(art: art)
-    scene.starter = Int(arg("--starter") ?? "0") ?? 0
+    scene.starter = min(2, max(0, Int(arg("--starter") ?? "0") ?? 0))
+    g.element = Element(rawValue: scene.starter) ?? .fire
     g.autopilot = true; g.start()
     var images: [CGImage] = []
     var t = 0.0
@@ -766,21 +798,21 @@ func selftest() -> Int32 {
         for (i, st) in f.stages.enumerated() {
             let tallest = (st.idle + st.run + st.jump).map(\.h).max()!
             check(abs(st.idle.map(\.h).max()! - Art.heroHeights[i]) < 0.6, "\(f.name) stage \(i) idle height")
-            let apexTop = T.crateHeight + T.jumpV * T.jumpV / (2 * T.gravity) + tallest
+            let apexTop = T.crateHeight + T.jumpV * T.jumpV / (2 * T.gravity) + tallest * 1.6
             check(apexTop <= T.top, "\(f.name) stage \(i) apex top \(apexTop) within \(T.top)")
         }
     }
-    check(art.orb.count == 6 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6, "orb/sparkle/water/balloon frames")
+    check(art.fruits.count == 8 && art.sparkle.count == 6 && art.water.count == 6 && art.balloon.count == 6, "fruit/sparkle/water/balloon frames")
 
     // Dockosaur-inspired held arc, with a forgiving minimum tap jump.
     let p = Game(seed: 1); p.start(); p.gapLeft = 1e9
     p.press(); var apex = 0.0, air = 0.0
     repeat { p.step(); apex = max(apex, p.y); air += T.step } while !p.onGround && air < 2
-    check(abs(apex - 33.02) < 0.3 && abs(air - 0.614) < 0.02, "held apex \(apex), airtime \(air)")
+    check(abs(apex - 42.48) < 0.3 && abs(air - 0.723) < 0.02, "held apex \(apex), airtime \(air)")
     let tap = Game(seed: 1); tap.start(); tap.gapLeft = 1e9
     tap.press(); tap.release(); var tapApex = 0.0, tapAir = 0.0
     repeat { tap.step(); tapApex = max(tapApex, tap.y); tapAir += T.step } while !tap.onGround && tapAir < 2
-    check(abs(tapApex - 27.16) < 0.3 && abs(tapAir - 0.557) < 0.02 && tapApex < apex, "quick tap retains a useful arc (\(tapApex), \(tapAir))")
+    check(abs(tapApex - 37.23) < 0.3 && abs(tapAir - 0.677) < 0.02 && tapApex < apex, "quick tap retains a useful arc (\(tapApex), \(tapAir))")
     let released = Game(seed: 1); released.start(); released.gapLeft = 1e9
     released.press(); run(released, 0.08); released.release()
     var releasedApex = released.y
@@ -815,7 +847,7 @@ func selftest() -> Int32 {
 
     // Jump buffer: one press shortly before landing gives exactly one jump.
     let jb = Game(seed: 1); jb.start(); jb.gapLeft = 1e9
-    jb.press(); run(jb, 0.53); jb.events.removeAll(); jb.press(); jb.release(); run(jb, 1.2)
+    jb.press(); run(jb, 0.64); jb.events.removeAll(); jb.press(); jb.release(); run(jb, 1.2)
     check(jb.events.filter { if case .jumped = $0 { return true }; return false }.count == 1, "jump buffer: one jump from one press")
 
     // Coyote: walking off a pit lip and pressing within 100 ms still jumps.
@@ -833,13 +865,13 @@ func selftest() -> Int32 {
 
     // Orbs: collected once; lethal collision resolves first.
     let o = Game(seed: 1); o.start(); o.gapLeft = 1e9
-    o.things = [Thing(id: 7, kind: .orb, x: T.heroX - 2, y: 2, w: T.orbSize, h: T.orbSize)]
+    o.things = [Thing(id: 7, kind: .fruit, x: T.heroX - 2, y: 2, w: T.fruitSize, h: T.fruitSize)]
     run(o, 0.2)
-    check(o.orbs == 1, "orb collected once (\(o.orbs))")
+    check(o.fruitsCollected == 1, "fruit collected once (\(o.fruitsCollected))")
     let lo = Game(seed: 1); lo.start(); lo.gapLeft = 1e9
-    lo.things = [Thing(id: 8, kind: .rock, x: T.heroX - 2, w: 7, h: 6), Thing(id: 9, kind: .orb, x: T.heroX - 2, y: 2, w: T.orbSize, h: T.orbSize)]
+    lo.things = [Thing(id: 8, kind: .rock, x: T.heroX - 2, w: 7, h: 6), Thing(id: 9, kind: .fruit, x: T.heroX - 2, y: 2, w: T.fruitSize, h: T.fruitSize)]
     lo.step()
-    check(lo.phase == .dying && lo.orbs == 0, "lethal first: no orb credit on the death tick")
+    check(lo.phase == .dying && lo.fruitsCollected == 0, "lethal first: no fruit credit on the death tick")
 
     // Pause and stalls add nothing.
     let ps = Game(seed: 1); ps.start(); run(ps, 1); let s0 = ps.score, d0 = ps.distance
@@ -859,7 +891,7 @@ func selftest() -> Int32 {
     while !platform.onGround && platform.phase == .running {
         platform.step(); crateApex = max(crateApex, platform.y)
     }
-    check(abs(crateApex - (T.crateHeight + 27.16)) < 0.3, "tap jump height is relative to the crate surface")
+    check(abs(crateApex - (T.crateHeight + 37.23)) < 0.3, "tap jump height is relative to the crate surface")
 
     let bufferedCrate = Game(seed: 1); bufferedCrate.start(); bufferedCrate.gapLeft = 1e9
     bufferedCrate.y = 10; bufferedCrate.vy = -80; bufferedCrate.onGround = false
@@ -912,6 +944,115 @@ func selftest() -> Int32 {
     check(trapped.captured && trapped.phase == .dying && trapped.events.contains { if case .captured = $0 { return true }; return false }, "touching an open ball starts the capture sequence")
     run(trapped, 1.7)
     check(trapped.phase == .over, "capture ends the run after the closing and wobble animation")
+
+    // Score, rather than elapsed time, drives evolution; a big bonus never skips the middle form.
+    let slowScore = Game(seed: 1); slowScore.start(); slowScore.active = 200; slowScore.gapLeft = 1e9
+    run(slowScore, 0.1)
+    check(slowScore.stage == 0 && slowScore.pendingStage == nil, "time alone cannot trigger evolution")
+    let fruitEvolution = Game(seed: 1); fruitEvolution.start(); fruitEvolution.gapLeft = 1e9
+    fruitEvolution.distance = Double(T.evolveScores[0] - Fruit.heart.points) * T.distPerPoint
+    fruitEvolution.collect(.heart); run(fruitEvolution, 0.7)
+    check(fruitEvolution.stage == 1 && fruitEvolution.evolutions == 1, "fruit bonus crosses the first evolution score")
+    fruitEvolution.distance = Double(T.evolveScores[1] - fruitEvolution.fruitPoints) * T.distPerPoint
+    run(fruitEvolution, 0.7)
+    check(fruitEvolution.stage == 2 && fruitEvolution.evolutions == 2, "combined distance and fruit score reaches final evolution")
+    let bigBonus = Game(seed: 1); bigBonus.start(); bigBonus.gapLeft = 1e9; bigBonus.fruitPoints = 900
+    run(bigBonus, 1.5)
+    let bonusStages = bigBonus.events.compactMap { event -> Int? in if case .evolved(let stage) = event { return stage }; return nil }
+    check(bonusStages == [1, 2], "large score bonuses evolve in order")
+
+    // Every starter has one matching safe pit, including all evolved forms.
+    for element in Element.allCases {
+        for pitType in PitType.allCases {
+            for stage in 0...2 {
+                let g = Game(seed: 1); g.element = element; g.start(); g.stage = stage; g.gapLeft = 1e9
+                var pit = Thing(id: 100, kind: .pit, x: T.heroX - 10, w: 40, h: 0); pit.pitType = pitType
+                g.things = [pit]; run(g, 0.2)
+                let matches = (element == .fire && pitType == .magma) || (element == .water && pitType == .water) || (element == .grass && pitType == .rock)
+                check(matches ? g.phase == .running && g.onGround : g.phase == .dying, "\(element) stage \(stage) crosses only its matching \(pitType) pit")
+            }
+        }
+    }
+
+    let big = Game(seed: 1); big.start(); big.gapLeft = 1e9; big.collect(.giant)
+    big.things = [Thing(id: 101, kind: .rock, x: T.heroX + 4, w: 11, h: 8)]
+    big.step()
+    check(big.heroScale == 1.6 && big.phase == .running && big.things[0].gone, "dark-blue fruit enlarges the hero and smashes a rock")
+    run(big, 7)
+    check(big.heroScale == 1 && big.powers[.giant] == nil, "giant wears off on safe ground")
+
+    let turbo = Game(seed: 1); turbo.start(); turbo.gapLeft = 1e9; turbo.collect(.thunder)
+    turbo.things = [Thing(id: 102, kind: .spike, x: T.heroX + 70, w: 18, h: 8),
+                    Thing(id: 103, kind: .rock, x: T.heroX + 240, w: 11, h: 8),
+                    Thing(id: 104, kind: .pit, x: T.heroX + 380, w: 38, h: 0)]
+    run(turbo, 0.5)
+    check(turbo.speed > turbo.baseSpeed * 1.5, "lightning increases speed")
+    for _ in 0..<Int(5 / T.step) { turbo.press(); turbo.release(); turbo.step() }
+    check(turbo.phase == .running && turbo.events.contains { if case .jumped = $0 { return true }; return false }, "lightning dodges spikes, rocks and water automatically despite stray taps")
+    let powerTime = turbo.powers[.thunder]; turbo.pause(); run(turbo, 3)
+    check(turbo.powers[.thunder] == powerTime, "pause freezes power duration")
+    turbo.resume(); run(turbo, 2)
+    check(!turbo.autoDodge && abs(turbo.speed - turbo.baseSpeed) < 1, "turbo returns to normal speed safely")
+
+    let shield = Game(seed: 1); shield.start(); shield.gapLeft = 1e9; shield.collect(.shield)
+    shield.things = [Thing(id: 105, kind: .rock, x: T.heroX + 4, w: 11, h: 8)]
+    shield.step()
+    check(shield.phase == .running && shield.powers[.shield] == nil && shield.things[0].gone, "green fruit absorbs one collision")
+    run(shield, 0.6); shield.things = [Thing(id: 106, kind: .rock, x: T.heroX + 4, w: 11, h: 8)]; shield.step()
+    check(shield.phase == .dying, "shield cannot absorb a second hit")
+    let shieldedCrate = Game(seed: 1); shieldedCrate.start(); shieldedCrate.gapLeft = 1e9; shieldedCrate.collect(.shield)
+    shieldedCrate.things = [Thing(id: 110, kind: .crate, x: T.heroX + 4, w: 8, h: T.crateHeight)]
+    shieldedCrate.step()
+    check(shieldedCrate.penalty == 0 && shieldedCrate.knockbackV == 0 && shieldedCrate.powers[.shield] == nil, "shield absorbs a crate bump without point loss")
+
+    let magnet = Game(seed: 1); magnet.start(); magnet.gapLeft = 1e9; magnet.collect(.magnet)
+    magnet.things = [Thing(id: 107, kind: .fruit, x: T.heroX + 65, y: 20, w: T.fruitSize, h: T.fruitSize)]
+    run(magnet, 0.5)
+    check(magnet.fruitsCollected == 2 && magnet.fruitPoints == Fruit.magnet.points + Fruit.heart.points, "purple fruit pulls an elevated heart into the hero")
+
+    for (fruit, pitType, element) in [(Fruit.flame, PitType.magma, Element.water), (.frost, .water, .fire)] {
+        let g = Game(seed: 1); g.element = element; g.start(); g.gapLeft = 1e9; g.collect(fruit); g.powers[fruit] = 0.01
+        var pit = Thing(id: 108, kind: .pit, x: T.heroX - 10, w: 40, h: 0); pit.pitType = pitType; g.things = [pit]
+        run(g, 0.2)
+        check(g.phase == .running && g.onGround && g.powers[fruit] != nil, "\(fruit) keeps the hero safe until clear of a \(pitType) pit")
+        run(g, 1)
+        check(g.powers[fruit] == nil && g.phase == .running, "\(fruit) ends after crossing safely")
+    }
+    let star = Game(seed: 1); star.start(); star.gapLeft = 1e9; star.collect(.star)
+    star.things = [Thing(id: 109, kind: .captureTrap, x: T.heroX + 4, w: 9, h: 8)]
+    star.step()
+    check(!star.captured && star.phase == .running && star.things[0].gone, "star guard protects against capture balls")
+
+    // No collectible streams: fruit is single-file and every spawn is at least nine seconds apart.
+    let sparse = Game(seed: 17); sparse.autopilot = true; sparse.start()
+    var lastFruit = -1e9, seenFruit = 0, seenPits = Set<Int>(), seenSpikes = false
+    for _ in 0..<Int(300 / T.step) {
+        sparse.step(); sparse.events.removeAll()
+        if sparse.fruitSpawns != seenFruit {
+            check(sparse.active - lastFruit >= 9 - T.step, "fruit spawns are spaced out")
+            lastFruit = sparse.active; seenFruit = sparse.fruitSpawns
+        }
+        check(sparse.things.filter { $0.kind == .fruit && !$0.gone }.count <= 1, "at most one uncollected fruit")
+        for t in sparse.things where t.kind == .pit { seenPits.insert(t.pitType.rawValue); check(t.w >= 30 && pitWindow(w: t.w, v: sparse.baseSpeed) >= T.minWindow, "wider pits remain jumpable") }
+        for t in sparse.things where t.kind == .spike { seenSpikes = true; check(t.w >= 18, "spikes spawn in visible triple groups") }
+    }
+    check(seenFruit >= 10 && seenFruit <= 34 && seenPits.count == 3 && seenSpikes, "sparse fruit and all three pit types appear")
+
+    // Exercise actual turbo control, without enabling the separate development autopilot.
+    var turboFailures = 0
+    for seed in 1...6 {
+        let g = Game(seed: UInt64(seed)); g.element = Element(rawValue: (seed - 1) % 3)!; g.start()
+        g.worldW = [240.0, 360.0, 500.0][(seed - 1) % 3]
+        g.collect(.thunder); g.powers[.thunder] = 180
+        for _ in 0..<Int(120 / T.step) {
+            // Recollecting lightning refreshes a duration rather than stacking it, so keep this test powered.
+            g.powers[.thunder] = 180
+            g.press(); g.release(); g.step(); g.events.removeAll()
+            if g.phase == .dying || g.phase == .over { turboFailures += 1; break }
+        }
+    }
+    check(turboFailures == 0, "automatic turbo survives generated hazards across starter types and strip widths")
+    print("turbo: \(turboFailures) failures across 12 simulated minutes without manual jumps")
 
     // Fair play: the bot runs 6 seeds x 5 minutes. Evolutions once each, on the ground; spawned hazards fair.
     var deaths = 0, violations = 0, evo = 0, drops = 0, cancels = 0, maxStage = 0
