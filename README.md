@@ -1,0 +1,67 @@
+# Embertrail
+
+A tiny endless runner that lives in a see-through strip just above your macOS Dock. Guide a little ember gecko across meadows, crystal caves and volcanoes. Jump rocks and spikes, clear water pits, collect capture orbs, dodge the moth-balloon gang, and watch your gecko evolve twice along the way.
+
+![Embertrail: the gecko runs, the moth-balloon drops a rock, then evolves into the cave stage](docs/demo.gif)
+
+| Meadow | Crystal cave | Volcano |
+|---|---|---|
+| ![Meadow stage with a water pit and its wave sign](docs/meadow.png) | ![Cave stage with an orb arc over a rock](docs/cave.png) | ![Volcano stage with the adult drake](docs/volcano.png) |
+
+## Play
+
+1. Click the gecko in the menu bar ▸ **Play**. The strip takes keyboard focus only now, never on its own.
+2. **Space** or **↑** to jump (one fixed jump; no hold-to-fly). Clicking the strip while playing also jumps.
+3. **Esc** pauses and hands focus back to your other app. **P** pauses or resumes; **Enter** starts or restarts.
+
+- **Hazards:** rocks, spikes, crates, boulders, and later scuttling crabs and burrowing moles.
+- **Water pits:** a wave sign warns you first. Water is deadly for every form.
+- **Orbs:** worth 10 points each. When they hang in an arc, the arc shows a safe jump.
+- **Score:** distance (1 point per 8 px) plus orbs. Your best score is saved.
+- **Evolution:** at 30 s of running the gecko becomes the plated adolescent and the world turns into a crystal cave; at 75 s it becomes the adult drake in a volcanic field. It always waits for safe ground first.
+- **Balloon gang:** after 20 s the moth-balloon gang may drift in. It marks a spot on the ground, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
+
+Clicks pass straight through the strip whenever you're not playing, and the game pauses on its own when you switch apps, lock the screen or sleep.
+
+From the menu-bar menu you can also choose the display (with several screens), the width (Narrow, Medium or Wide), the position (raise or lower), and the scenery (Full, Light or Off). You can turn on Reduce Motion, or hide the strip.
+
+## Build
+
+```sh
+./build.sh            # builds build/Embertrail.app and runs the self-test
+./build.sh --install  # also copies it to /Applications
+open /Applications/Embertrail.app
+```
+
+Needs macOS 14+ and the Xcode Command Line Tools.
+
+Development tools (the bot plays, frames are rendered exactly like the app):
+
+```sh
+build/Embertrail.app/Contents/MacOS/Embertrail --selftest
+build/Embertrail.app/Contents/MacOS/Embertrail --snapshot out.png --seconds 50
+build/Embertrail.app/Contents/MacOS/Embertrail --record out.gif --from 19.5 --to 34 --fps 12
+```
+
+## What's built and what isn't (yet)
+
+**Built and tested** (`--selftest`):
+- **Physics:** fixed 1/120 s steps, 19.36 px jump apex, 0.44 s airtime, a 100 ms jump buffer, 70 ms coyote time and a constant 10×14 hitbox for every form.
+- **Water:** real gaps in the ground, deadly by drowning.
+- **Fair hazards:** every hazard leaves at least a 120 ms jump window at the current speed (zero violations over 30 bot-minutes).
+- **Order of checks:** lethal collisions are resolved before orbs are collected, and orbs count once.
+- **Evolution:** exactly once per stage, in order, on the ground.
+- **Balloon drops:** at least 1.6 s of lead, one authoritative rock, and a 20 s cooldown.
+- **Pause and stalls:** pausing adds no score; long stalls pause instead of catching up.
+- **Restart:** resets the run and keeps the best score.
+
+**Not done yet:**
+- **Native-size art:** sprites are scaled from the generated sheets, not hand-cleaned at 16 to 24 px.
+- **Bitmap font:** the HUD uses the system font for now.
+- **Sound:** the game is silent.
+- **Dock placement:** auto-hidden and side Docks use a bottom-edge fallback (labelled in the Position menu); there's no exact Dock tracking.
+- **Real-machine checks:** multiple monitors and 120 Hz displays haven't been tested on hardware.
+
+## Art and licence
+
+All the art is original, made with AI image generation for this project, and no third-party assets are included. See [docs/PROVENANCE.md](docs/PROVENANCE.md). No licence has been chosen yet for the code or the art.
