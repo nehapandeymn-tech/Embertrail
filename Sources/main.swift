@@ -38,6 +38,10 @@ final class Scene {
     private var pools: [String: [CALayer]] = [:]
     private var used: [String: Int] = [:]
     private let heroL = CALayer(), markerL = CALayer(), hudL = CALayer(), msgL = CALayer(), helpL = CALayer()
+    private let buttonL = CALayer(), buttonText = CALayer()
+    /// Where the Play/Resume button is, in view points (zero when hidden). The app makes only this clickable.
+    private(set) var buttonRect = CGRect.zero
+    var buttonHot = false
     private var textCache: [String: CGImage] = [:]
     private(set) var size = CGSize.zero, backing: CGFloat = 2
     var effects: [Effect] = []
@@ -49,7 +53,9 @@ final class Scene {
         self.art = art
         root.masksToBounds = true
         root.addSublayer(world)
-        for l in [heroL, markerL, hudL, msgL, helpL] { pix(l) }
+        for l in [heroL, markerL, hudL, msgL, helpL, buttonL, buttonText] { pix(l) }
+        buttonL.cornerRadius = 9
+        buttonL.borderWidth = 1
         markerL.cornerRadius = 2
         markerL.zPosition = 4                                   // above the ground tiles it marks
         markerL.backgroundColor = CGColor(red: 1, green: 0.32, blue: 0.24, alpha: 1)
@@ -260,9 +266,24 @@ final class Scene {
         case .over: msg = "GAME OVER  ·  \(g.score)"
         default: msg = ""
         }
-        setText(msgL, msg, size: 11, centerX: size.width / 2, topY: size.height * 0.62, weight: .heavy)
+        setText(msgL, msg, size: 11, centerX: size.width / 2, topY: size.height * 0.86, weight: .heavy)
         setText(helpL, g.phase == .running || g.phase == .evolving || g.phase == .dying ? "" : help, size: 8.5,
-                centerX: size.width / 2, topY: size.height * 0.62 - 15, alpha: 0.85)
+                centerX: size.width / 2, topY: size.height * 0.86 - 15, alpha: 0.85)
+
+        // Play / Resume / Play again button: the only clickable thing while the game isn't running.
+        let label: String? = { switch g.phase { case .ready: return "▶  Play"; case .paused: return "▶  Resume"; case .over: return "▶  Play again"; default: return nil } }()
+        if buttonL.superlayer == nil { root.addSublayer(buttonL); root.addSublayer(buttonText) }
+        if let label {
+            buttonL.isHidden = false
+            setText(buttonText, label, size: 10.5, centerX: size.width / 2, topY: size.height * 0.86 - 31, weight: .heavy)
+            let t = buttonText.frame
+            buttonRect = CGRect(x: t.midX - max(t.width + 16, 92) / 2, y: t.midY - 11, width: max(t.width + 16, 92), height: 22)
+            buttonL.frame = buttonRect
+            buttonL.backgroundColor = buttonHot ? CGColor(red: 1, green: 0.42, blue: 0.32, alpha: 1) : CGColor(red: 0.88, green: 0.33, blue: 0.27, alpha: 0.95)
+            buttonL.borderColor = CGColor(red: 1, green: 0.9, blue: 0.75, alpha: buttonHot ? 1 : 0.6)
+        } else {
+            buttonL.isHidden = true; buttonText.isHidden = true; buttonRect = .zero
+        }
     }
 
     // Text: system font (the bitmap font in the pack has no metrics yet), white with a dark outline.
@@ -379,7 +400,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         default: break
         }
     }
-    func click() { if game.phase == .running { game.press() } }
+    func click() {
+        if game.phase == .running || game.phase == .evolving { game.press(); return }
+        let p = view.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
+        if scene.buttonRect.contains(p) { play() }
+    }
 
     @objc func play() {
         if Prefs.hidden { toggleHidden() }
@@ -410,18 +435,30 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if game.events.contains(where: { if case .died = $0 { return true }; return false }) { Prefs.best = game.best }
             game.events.removeAll()
         }
-        let interactive = game.phase == .running || game.phase == .evolving
-        if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }   // passive: clicks pass through
+        // While playing, the whole strip takes clicks (to jump). Otherwise only the Play button does; anywhere
+        // else over the strip it fades and clicks go straight through to the windows behind.
+        let playing = game.phase == .running || game.phase == .evolving || game.phase == .dying
+        let m = NSEvent.mouseLocation, f = panel.frame
+        let local = CGPoint(x: m.x - f.minX, y: m.y - f.minY)
+        let onButton = !playing && scene.buttonRect.insetBy(dx: -4, dy: -4).contains(local)
+        let mouseOn = playing || onButton
+        if panel.ignoresMouseEvents == mouseOn { panel.ignoresMouseEvents = !mouseOn }
+        scene.buttonHot = onButton
+        setFaded(!playing && !onButton && f.contains(m))
         scene.layout(size: view.bounds.size, backing: panel.backingScaleFactor)
         scene.update(game, dt: dt, help: helpText)
     }
     var helpText: String {
-        switch game.phase {
-        case .ready: return "Embertrail menu ▸ Play   ·   Space jumps   ·   water is deadly for everyone   ·   Esc pauses"
-        case .paused: return panel.isKeyWindow ? "P or Enter to resume" : "Embertrail menu ▸ Resume"
-        case .over: return panel.isKeyWindow ? "Enter to play again" : "Embertrail menu ▸ Play again"
-        default: return ""
-        }
+        game.phase == .ready ? "Space jumps   ·   water is deadly for everyone   ·   Esc pauses" : ""
+    }
+
+    var faded = false
+    func setFaded(_ on: Bool) {
+        guard on != faded else { return }
+        faded = on
+        let target: CGFloat = on ? 0.15 : 1
+        if scene.reduceMotion { panel.alphaValue = target; return }
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.18; panel.animator().alphaValue = target }
     }
 
     // MARK: Placement: just above the Dock's safe area, on the chosen display.
@@ -527,7 +564,7 @@ func renderFrame(_ scene: Scene, _ g: Game, width: CGFloat, backing b: CGFloat, 
     }
     ctx.translateBy(x: 0, y: 40)
     scene.layout(size: CGSize(width: width, height: CGFloat(stripH) * px), backing: b)
-    scene.update(g, dt: dt, help: g.phase == .ready ? "Embertrail menu ▸ Play   ·   Space jumps   ·   water is deadly for everyone   ·   Esc pauses" : "")
+    scene.update(g, dt: dt, help: g.phase == .ready ? "Space jumps   ·   water is deadly for everyone   ·   Esc pauses" : "")
     ctx.interpolationQuality = .high
     scene.root.render(in: ctx)
     return ctx.makeImage()!

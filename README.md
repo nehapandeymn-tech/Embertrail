@@ -10,7 +10,7 @@ A tiny endless runner that lives in a see-through strip just above your macOS Do
 
 ## Play
 
-1. Click the gecko in the menu bar ▸ **Play**. The strip takes keyboard focus only now, never on its own.
+1. Click **▶ Play** on the strip (or the gecko in the menu bar ▸ **Play**). The strip takes keyboard focus only now, never on its own.
 2. **Space** or **↑** to jump (one fixed jump; no hold-to-fly). Clicking the strip while playing also jumps.
 3. **Esc** pauses and hands focus back to your other app. **P** pauses or resumes; **Enter** starts or restarts.
 
@@ -21,7 +21,7 @@ A tiny endless runner that lives in a see-through strip just above your macOS Do
 - **Evolution:** at 30 s of running the gecko becomes the plated adolescent and the world turns into a crystal cave; at 75 s it becomes the adult drake in a volcanic field. It always waits for safe ground first.
 - **Balloon gang:** after 20 s the moth-balloon gang may drift in. It marks a spot on the ground, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
 
-Clicks pass straight through the strip whenever you're not playing, and the game pauses on its own when you switch apps, lock the screen or sleep.
+When you're not playing, only the Play button is clickable. Hover anywhere else on the strip and it fades away, with clicks going straight through to your windows, and the game pauses on its own when you switch apps, lock the screen or sleep.
 
 From the menu-bar menu you can also choose the display (with several screens), the width (Narrow, Medium or Wide), the position (raise or lower), and the scenery (Full, Light or Off). You can turn on Reduce Motion, or hide the strip.
 
