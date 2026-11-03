@@ -21,7 +21,7 @@ struct Sprite {
 
 struct Cut { let image: CGImage; let w: Int; let h: Int }   // trimmed source frame (source px)
 
-enum ArtError: Error { case missing(String) }
+enum ArtError: Error { case missing(String), invalidSheet(String) }
 
 func loadSheet(_ dir: URL, _ name: String) throws -> CGImage {
     let url = dir.appendingPathComponent(name + ".png")
@@ -130,11 +130,11 @@ func makeSprite(_ c: Cut, k: Double) -> Sprite {
                   mask: mask, mw: mw, mh: mh)
 }
 
-/// All sprites the game uses. Original-mode art only.
+/// All sprites the game uses, including the user-supplied Pokémon character sheets.
 final class Art {
     struct Stage { let idle: [Sprite]; let run: [Sprite]; let jump: [Sprite] }
     struct Family { let id: String; let name: String; let stages: [Stage] }
-    /// Starter families that loaded (the ember gecko always; the others if their sheet is present and cuts cleanly).
+    /// All three starter families, each with three evolution stages.
     let families: [Family]
     var hero: [Stage] { families[0].stages }
     let orb: [Sprite], orbBounce: [Sprite], orbOpen: [Sprite], sparkle: [Sprite]
@@ -143,7 +143,8 @@ final class Art {
     let crab: [Sprite], mole: [Sprite]
     let explorerCheer: [Sprite]
     let balloon: [Sprite]
-    let gruntIdle: [Sprite], gruntRun: [Sprite], gruntDown: Sprite   // moth-gang grunt; knocked flat
+    struct GangMember { let idle: [Sprite]; let run: [Sprite]; let down: Sprite }
+    let gangMembers: [GangMember]      // Jessie and James, with a stable appearance per encounter
     let smallOrb: [Sprite]             // thrown capture orbs (smaller than the collectible ones)
     let swirl: [CGImage]               // cartoon dizzy-eyes swirl, 4 rotation frames
     let ground: [CGImage]              // per biome: a thin top strip (16 x 4 logical) that tiles
@@ -156,9 +157,9 @@ final class Art {
 
     init(dir: URL) throws {
         func row(_ r: Int, in sheet: [[Cut?]]) -> [Cut] { sheet[r].compactMap { $0 } }
-        func family(_ file: String) throws -> [Stage]? {
+        func family(_ file: String) throws -> [Stage] {
             let sheet = cutSheet(try loadSheet(dir, file), cols: 6, rows: 9)
-            guard sheet.allSatisfy({ $0.compactMap { $0 }.count >= 2 }) else { return nil }   // a draft that didn't cut cleanly
+            guard sheet.allSatisfy({ $0.compactMap { $0 }.count == 6 }) else { throw ArtError.invalidSheet(file) }
             return (0..<3).map { s in
                 let idle = row(s * 3, in: sheet), run = row(s * 3 + 1, in: sheet), jump = row(s * 3 + 2, in: sheet)
                 // One scale per stage from the idle pose, so running/jumping poses keep their true size relative to it.
@@ -166,13 +167,9 @@ final class Art {
                 return Stage(idle: idle.map { makeSprite($0, k: k) }, run: run.map { makeSprite($0, k: k) }, jump: jump.map { makeSprite($0, k: k) })
             }
         }
-        var fams = [Family(id: "ember", name: "Ember Gecko", stages: try family("ember-gecko-evolutions")!)]
-        for (id, file, name) in [("thistle", "thistle-hedgehog-evolutions", "Thistle Hedgehog"), ("ripple", "ripple-newt-evolutions", "Ripple Newt")] {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(file + ".png").path), let st = try family(file) {
-                fams.append(Family(id: id, name: name, stages: st))
-            }
+        families = try [("charmander", "Charmander"), ("bulbasaur", "Bulbasaur"), ("squirtle", "Squirtle")].map { id, name in
+            Family(id: id, name: name, stages: try family(id + "-evolutions"))
         }
-        families = fams
 
         let objs = cutSheet(try loadSheet(dir, "orbs-obstacles-signs"), cols: 6, rows: 6, minBlob: 6)
         let orbK = 9 / Double(row(0, in: objs).map(\.h).max()!)
@@ -195,13 +192,16 @@ final class Art {
         let expK = 18 / Double(row(5, in: critters).map(\.h).max()!)
         explorerCheer = row(5, in: critters).map { makeSprite($0, k: expK) }
 
-        let gang = cutSheet(try loadSheet(dir, "moth-balloon-gang"), cols: 6, rows: 6)
+        let gang = cutSheet(try loadSheet(dir, "team-rocket"), cols: 6, rows: 9)
+        guard [0, 3, 4, 6, 7].allSatisfy({ row($0, in: gang).count == 6 }) else { throw ArtError.invalidSheet("team-rocket") }
         let balK = 34 / Double(row(0, in: gang).map(\.h).max()!)
         balloon = row(0, in: gang).map { makeSprite($0, k: balK) }
-        let gK = 12 / Double(row(3, in: gang).map(\.h).max()!)
-        gruntIdle = row(3, in: gang).map { makeSprite($0, k: gK) }
-        gruntRun = row(4, in: gang).map { makeSprite($0, k: gK) }
-        gruntDown = makeSprite(rotateCut(row(3, in: gang)[0]), k: gK)
+        gangMembers = [3, 6].map { r in
+            let idle = row(r, in: gang), run = row(r + 1, in: gang)
+            let k = 12 / Double(idle.map(\.h).max()!)
+            return GangMember(idle: idle.map { makeSprite($0, k: k) }, run: run.map { makeSprite($0, k: k) },
+                              down: makeSprite(rotateCut(idle[0]), k: k))
+        }
         swirl = (0..<4).map { swirlImage(phase: Double($0) / 4) }
 
         let terrain = cutSheet(try loadSheet(dir, "terrain-water-lava"), cols: 6, rows: 6, minBlob: 6)

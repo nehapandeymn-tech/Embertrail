@@ -1,28 +1,28 @@
 # Embertrail
 
-A tiny endless runner that lives in a see-through strip just above your macOS Dock. Pick your starter (an ember gecko, a thistle hedgehog or a ripple newt) and run across meadows, crystal caves and volcanoes. Jump rocks and spikes, clear water pits, collect orbs, dodge the moth-balloon gang's capture orbs, knock out its grunts, and watch your starter evolve twice along the way.
+A tiny endless runner that lives in a see-through strip just above your macOS Dock. Pick your starter (Charmander, Bulbasaur or Squirtle) and run across meadows, crystal caves and volcanoes. Jump rocks and spikes, clear water pits, collect orbs, dodge Team Rocket’s capture orbs, knock out its grunts, and watch your starter evolve twice along the way.
 
-![Embertrail: the gecko runs, the moth-balloon drops a rock, then evolves into the cave stage](docs/demo.gif)
+![Embertrail: Charmander runs, Team Rocket drops a rock, then evolves into the cave stage](docs/demo.gif)
 
 | Meadow | Crystal cave | Volcano |
 |---|---|---|
-| ![Meadow stage with a water pit and its wave sign](docs/meadow.png) | ![Cave stage with an orb arc over a rock](docs/cave.png) | ![Volcano stage with the adult drake](docs/volcano.png) |
+| ![Meadow stage with a water pit and its wave sign](docs/meadow.png) | ![Cave stage with an orb arc over a rock](docs/cave.png) | ![Volcano stage with Charizard](docs/volcano.png) |
 
 ## Choose your starter
 
-Three original starters, each with three forms:
+Three Pokémon starters, each with three forms:
 
-- **Ember Gecko** (fire)
-- **Thistle Hedgehog** (grass)
-- **Ripple Newt** (water)
+- **Charmander → Charmeleon → Charizard** (fire)
+- **Bulbasaur → Ivysaur → Venusaur** (grass)
+- **Squirtle → Wartortle → Blastoise** (water)
 
 Pick one the first time you play. Switch anytime with **Change starter** on the home screen, or from the menu-bar menu ▸ Starter. Every starter plays by exactly the same rules.
 
-![Choose your starter: Ember Gecko, Thistle Hedgehog, Ripple Newt](docs/starters.png)
+![Choose your starter: Charmander, Bulbasaur, Squirtle](docs/starters.png)
 
 ## Play
 
-1. Click **▶ Play** on the strip (or the gecko in the menu bar ▸ **Play**). The strip takes keyboard focus only now, never on its own.
+1. Click **▶ Play** on the strip (or the character icon in the menu bar ▸ **Play**). The strip takes keyboard focus only now, never on its own.
 2. **Space** or **↑** to jump (one fixed jump; no hold-to-fly). Clicking the strip while playing also jumps.
 3. **Esc** pauses and hands focus back to your other app. **P** pauses or resumes; **Enter** starts or restarts.
 
@@ -31,10 +31,10 @@ Pick one the first time you play. Switch anytime with **Change starter** on the 
 - **Orbs:** worth 10 points each. When they hang in an arc, the arc shows a safe jump.
 - **Score:** distance (1 point per 8 px) plus orbs. Your best score is saved.
 - **Evolution:** at 30 s of running your starter takes its second form and the world turns into a crystal cave; at 75 s it takes its final form in a volcanic field. It always waits for safe ground first.
-- **Grunt ambush:** a moth-gang grunt throws small capture orbs. They land and roll at you, so jump them, because if one touches you, you're captured: the orb snaps shut and wobbles, and it's game over. Then jump right over the grunt to knock it out cold (swirly eyes, +25).
+- **Grunt ambush:** Jessie or James throws small capture orbs. They land and roll at you, so jump them, because if one touches you, you're captured: the orb snaps shut and wobbles, and it's game over. Then jump right over the grunt to knock it out cold (swirly eyes, +25).
 
   ![A grunt ambush: rolling capture orbs, then the grunt knocked out with swirly eyes](docs/ambush.gif)
-- **Balloon gang:** after 20 s the moth-balloon gang may drift in. It marks a spot on the ground, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
+- **Balloon gang:** after 20 s Team Rocket’s Meowth balloon may drift in. It marks a spot on the ground, then drops one rock there, always well ahead of you. If there's no fair spot, it just leaves.
 
 When you're not playing, only the Play button is clickable. Hover anywhere else on the strip and it fades away, with clicks going straight through to your windows, and the game pauses on its own when you switch apps, lock the screen or sleep.
 
@@ -79,4 +79,4 @@ build/Embertrail.app/Contents/MacOS/Embertrail --record out.gif --from 19.5 --to
 
 ## Art and licence
 
-All the art is original, made with AI image generation for this project, and no third-party assets are included. See [docs/PROVENANCE.md](docs/PROVENANCE.md). No licence has been chosen yet for the code or the art.
+This is an unofficial Pokémon fan project, not affiliated with or endorsed by Nintendo, Game Freak, Creatures, or The Pokémon Company. The Pokémon and Team Rocket sprite sheets were supplied by the user; the scenery and other assets come from the original Embertrail art set. See [docs/PROVENANCE.md](docs/PROVENANCE.md). No licence has been chosen for the code; no redistribution licence was supplied with the Pokémon artwork.

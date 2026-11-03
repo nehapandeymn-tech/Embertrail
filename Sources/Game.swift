@@ -43,7 +43,7 @@ enum Phase: Equatable { case ready, running, evolving, paused, dying, over }
 
 enum Kind: Equatable {
     case rock, spike, crate, boulder, crab, mole       // ground hazards
-    case grunt                                          // moth-gang grunt: jump over it to defeat it
+    case grunt                                          // Team Rocket member: jump over them to defeat it
     case gruntDown                                      // defeated grunt (scenery, swirly eyes)
     case thrownOrb                                      // capture orb in flight; harmless until it lands
     case capOrb                                         // capture orb rolling on the ground: touching it captures you

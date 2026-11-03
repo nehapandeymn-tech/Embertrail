@@ -200,13 +200,16 @@ final class Scene {
                 let bob = moving ? (sin(t.t * 5) * 0.8).rounded() : 0
                 sprite("thing", art.orb[moving ? Int(t.t * 8) % art.orb.count : 0], feetX: cx, y: t.y + bob)
             case .pit: break
-            case .grunt: sprite("thing", art.gruntRun[moving ? Int(t.t * 10) % art.gruntRun.count : 0], feetX: cx, y: 0)
+            case .grunt:
+                let member = art.gangMembers[t.id % art.gangMembers.count]
+                sprite("thing", member.run[moving ? Int(t.t * 10) % member.run.count : 0], feetX: cx, y: 0)
             case .gruntDown:
                 // Knocked flat with swirly eyes, spinning.
-                sprite("thing", art.gruntDown, feetX: cx, y: 0)
+                let down = art.gangMembers[t.id % art.gangMembers.count].down
+                sprite("thing", down, feetX: cx, y: 0)
                 let l = pooled("thing")
                 let sw = art.swirl[moving ? Int(t.t * 12) % art.swirl.count : 0]
-                put(l, sw, frame(t.x + t.w / 2 + art.gruntDown.w / 2 - 6.5, 1.5, 6, 6))
+                put(l, sw, frame(t.x + t.w / 2 + down.w / 2 - 6.5, 1.5, 6, 6))
             case .thrownOrb, .capOrb:
                 sprite("thing", art.smallOrb[moving ? Int(t.t * 14) % art.smallOrb.count : 0], feetX: cx, y: t.y)
             }
@@ -252,7 +255,7 @@ final class Scene {
         heroL.opacity = g.phase == .dying && moving && Int(g.dyingT * 12) % 2 == 1 ? 0.25 : 1
         heroL.isHidden = (picking && g.phase == .ready) || (g.phase == .dying && g.y < -6) || ((g.phase == .dying || g.phase == .over) && g.captured && g.dyingT > 0.2)
         if g.captured && (g.phase == .dying || g.phase == .over) {
-            // The capture orb pops open, snaps shut around the gecko, then wobbles three times.
+            // The capture orb pops open, snaps shut around the starter, then wobbles three times.
             let k = g.dyingT
             let f: Sprite
             if k < 0.45 { f = art.orbOpen[max(0, min(art.orbOpen.count - 1, art.orbOpen.count - 1 - Int(k / 0.45 * Double(art.orbOpen.count))))] }
@@ -726,6 +729,8 @@ func selftest() -> Int32 {
     // Art: every sheet cut, hero forms at their heights, adult apex inside the strip.
     let art = try! Art(dir: artDir())
     check(art.families.count == 3, "three starters load (\(art.families.map(\.name)))")
+    check(art.families.map(\.id) == ["charmander", "bulbasaur", "squirtle"], "Pokémon starter sheets are active")
+    check(art.gangMembers.count == 2 && art.gangMembers.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 }, "Jessie and James animation frames load")
     for f in art.families {
         check(f.stages.count == 3 && f.stages.allSatisfy { $0.idle.count == 6 && $0.run.count == 6 && $0.jump.count == 6 }, "\(f.name): 3 x (6 idle, 6 run, 6 jump)")
         for (i, st) in f.stages.enumerated() {
